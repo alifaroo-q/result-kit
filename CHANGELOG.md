@@ -1,5 +1,10 @@
 # @zireal/result-kit
 
+## [1.1.0] - 2026-03-30 (Rollback)
+
+- All versions v2.0.0 → v4.0.0 have been unpublished due to critical issues.
+- Repository has been rolled back to stable v1.1.0.
+
 ## 1.1.0
 
 ### Minor Changes
