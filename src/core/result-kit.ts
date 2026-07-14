@@ -35,8 +35,8 @@ const isResultShape = <T, E>(value: unknown): value is Result<T, E> => {
  * rather than a type meant to be instantiated.
  */
 export abstract class ResultKit {
-  static pipe<T>(value: T): ResultPipeline<T, never>;
   static pipe<T, E>(result: Result<T, E>): ResultPipeline<T, E>;
+  static pipe<T>(value: T): ResultPipeline<T, never>;
   static pipe<T, E>(valueOrResult: T | Result<T, E>): ResultPipeline<T, E> {
     return isResultShape<T, E>(valueOrResult)
       ? new ResultPipeline(valueOrResult)

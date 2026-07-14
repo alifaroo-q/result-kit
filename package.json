@@ -61,10 +61,17 @@
       "import": "./dist/core/index.mjs",
       "require": "./dist/core/index.cjs"
     },
+    "./fp-ts": {
+      "import": "./dist/fp-ts/index.mjs",
+      "require": "./dist/fp-ts/index.cjs"
+    },
     "./nest": {
       "import": "./dist/nest/index.mjs",
       "require": "./dist/nest/index.cjs"
     },
     "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "fp-ts": "^2.16.11"
   }
 }

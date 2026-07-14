@@ -4,6 +4,7 @@ export default defineConfig({
   entry: {
     index: 'src/index.ts',
     'core/index': 'src/core/index.ts',
+    'fp-ts/index': 'src/fp-ts/index.ts',
     'nest/index': 'src/nest/index.ts',
   },
   format: ['esm', 'cjs'],

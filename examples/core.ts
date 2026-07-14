@@ -48,11 +48,13 @@ const result = ResultKit
   .pipe("session-token")
   .andThen(requireSession)
   .andThen((session) => findUser(session.userId))
-  .done();
-
-console.log(
-  ResultKit.match(result, {
-    onSuccess: (user) => user.name,
+  .map((user) => user.name.toUpperCase())
+  .tap({
+    onSuccess: (name) => console.info("loaded user", name),
+  })
+  .match({
+    onSuccess: (name) => name,
     onFailure: (error) => error.message,
-  }),
-);
+  });
+
+console.log(result);

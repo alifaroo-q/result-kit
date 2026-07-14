@@ -1,6 +1,10 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
-import { ResultKit, type Result, type TypedErrorUnion } from '../../src/core';
+import {
+  ResultKit,
+  type Result,
+  type TypedErrorUnion,
+} from '../../src/core';
 
 type AuthError = TypedErrorUnion<'unauthorized'>;
 type UserError = TypedErrorUnion<'user_not_found'>;
@@ -70,6 +74,43 @@ describe('ResultPipeline', () => {
     });
   });
 
+  it('supports sync map, mapError, tap, orElse, and match helpers', () => {
+    const observed: string[] = [];
+
+    const successValue = ResultKit
+      .pipe({ name: 'Ada Lovelace' })
+      .map((user) => user.name.toUpperCase())
+      .tap({
+        onSuccess: (name) => observed.push(`success:${name}`),
+      })
+      .match({
+        onSuccess: (name) => name,
+        onFailure: () => 'fallback',
+      });
+
+    const failedLengthResult: Result<number, TypedErrorUnion<'missing_name'>> =
+      ResultKit.fail({
+        type: 'missing_name',
+        message: 'Name is required',
+      });
+
+    const recovered = ResultKit
+      .pipe(failedLengthResult)
+      .mapError((error) => error.type)
+      .tap({
+        onFailure: (errorType) => observed.push(`failure:${errorType}`),
+      })
+      .orElse((errorType) => ResultKit.success(errorType.length))
+      .done();
+
+    expect(successValue).toBe('ADA LOVELACE');
+    expect(recovered).toEqual(ResultKit.success('missing_name'.length));
+    expect(observed).toEqual([
+      'success:ADA LOVELACE',
+      'failure:missing_name',
+    ]);
+  });
+
   it('starts from promises and widens error unions across async steps', async () => {
     const requireSessionAsync = async (
       token: string,
@@ -127,5 +168,47 @@ describe('ResultPipeline', () => {
         message: 'Missing token',
       },
     });
+  });
+
+  it('supports mixed sync and async callbacks in async pipelines', async () => {
+    const observed: string[] = [];
+
+    const successValue = await ResultKit
+      .pipeAsync(Promise.resolve('Ada Lovelace'))
+      .map((name) => name.toUpperCase())
+      .tap({
+        onSuccess: async (name) => {
+          observed.push(`success:${name}`);
+        },
+      })
+      .match({
+        onSuccess: (name) => name,
+        onFailure: () => 'fallback',
+      });
+
+    const recovered = await ResultKit
+      .pipeAsync(
+        Promise.resolve(
+          ResultKit.fail({
+            type: 'missing_name',
+            message: 'Name is required',
+          }),
+        ),
+      )
+      .mapError(async (error) => error.type)
+      .tap({
+        onFailure: (errorType) => {
+          observed.push(`failure:${errorType}`);
+        },
+      })
+      .orElse(async (errorType) => ResultKit.success(errorType.length))
+      .done();
+
+    expect(successValue).toBe('ADA LOVELACE');
+    expect(recovered).toEqual(ResultKit.success('missing_name'.length));
+    expect(observed).toEqual([
+      'success:ADA LOVELACE',
+      'failure:missing_name',
+    ]);
   });
 });

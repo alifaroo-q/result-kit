@@ -6,6 +6,7 @@ Type-safe result and structured error utilities for TypeScript, with optional Ne
 
 - `@zireal/result-kit`
 - `@zireal/result-kit/core`
+- `@zireal/result-kit/fp-ts`
 - `@zireal/result-kit/nest`
 
 The package root re-exports the framework-agnostic core only. Nest-specific helpers live in `@zireal/result-kit/nest`.
@@ -98,7 +99,46 @@ const result = ResultKit
   .pipe("session-token")
   .andThen(requireSession)
   .andThen((session) => findUser(session.userId))
-  .done();
+  .map((user) => user.name)
+  .tap({
+    onSuccess: (name) => console.info("loaded user", name),
+  })
+  .match({
+    onSuccess: (name) => name,
+    onFailure: (error) => error.message,
+  });
+```
+
+Async pipelines accept both sync and async callbacks for fluent composition:
+
+```ts
+const displayName = await ResultKit
+  .pipeAsync(Promise.resolve("session-token"))
+  .andThen(requireSession)
+  .andThen((session) => Promise.resolve(findUser(session.userId)))
+  .map((user) => user.name.toUpperCase())
+  .orElse((error) => Promise.resolve(ResultKit.success(error.message)))
+  .match({
+    onSuccess: (name) => name,
+    onFailure: (error) => error.message,
+  });
+```
+
+## `fp-ts` Interop
+
+Use the optional `@zireal/result-kit/fp-ts` entrypoint when you need to bridge into `Either` or `TaskEither` workflows without changing the main library API:
+
+```ts
+import { right } from "fp-ts/Either";
+import {
+  fromEither,
+  toEither,
+  toTaskEither,
+} from "@zireal/result-kit/fp-ts";
+
+const result = fromEither(right(42));
+const either = toEither(ResultKit.success(42));
+const taskEither = toTaskEither(Promise.resolve(ResultKit.success(42)));
 ```
 
 ## Nest Usage
@@ -147,16 +187,21 @@ const user = unwrapOrThrow(result, {
 - `TypedError`, `TypedErrorOf`, `TypedErrorUnion`
 - `Success`, `Failure`, `Result`
 - `ResultPipeline`, `AsyncResultPipeline`
+  with `andThen`, `map`, `mapError`, `tap`, `orElse`, `match`, `done`
 - `ResultKit.success`, `failure`, `fail`
 - `ResultKit.pipe`, `pipeAsync`
 - `ResultKit.isSuccess`, `isFailure`, `isTypedError`
-- `ResultKit.map`, `mapAsync`, `mapError`, `mapErrorAsync`
+- `ResultKit.map`, `bimap`, `mapAsync`, `mapError`, `mapErrorAsync`
 - `ResultKit.andThen`, `andThenAsync`, `orElse`, `orElseAsync`
-- `ResultKit.match`, `matchAsync`
+- `ResultKit.match`, `matchAsync`, `tap`, `tapAsync`
 - `ResultKit.unwrap`, `unwrapSuccess`, `unwrapFailure`, `unwrapOr`, `unwrapOrElse`, `unwrapOrElseAsync`
 - `ResultKit.combine`, `combineAsync`, `combineWithAllErrors`, `combineWithAllErrorsAsync`
 - `ResultKit.fromNullable`, `fromPredicate`, `fromPromise`, `fromThrowable`, `fromThrowableAsync`
 - `ResultKit.partition`, `filterSuccesses`, `filterFailures`, `toNullable`, `flatten`
+
+### `fp-ts`
+
+- `toEither`, `fromEither`, `toTaskEither`, `fromTaskEither`
 
 ### Nest
 
