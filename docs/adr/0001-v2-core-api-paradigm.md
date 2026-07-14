@@ -6,6 +6,7 @@
 - **Ticket:** [Decide: the v2 core API paradigm (keystone)](https://github.com/alifarooq-zk/result-kit/issues/10)
 - **Map:** [Map: @zireal/result-kit v2 — lean, dependency-free core rework](https://github.com/alifarooq-zk/result-kit/issues/8)
 - **Evidence:** [`docs/research/api-packaging-landscape.md`](../research/api-packaging-landscape.md)
+- **Note ([ADR 0006](./0006-v2-package-layout-entrypoints.md), 2026-07-14):** v2 ships **ESM-only**, which makes the "ESM+CJS `instanceof` dual-package hazard" cited below as *one* justification for the plain-union source of truth **moot**. This ADR's decision **stands unchanged** — the plain-union interchange type rests independently on the JSON round-trip guarantee (ADR 0003) and the byethrow corroboration. Not a reversal.
 
 ## Context
 
