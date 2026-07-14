@@ -51,3 +51,17 @@
 
 - Link to [README.md](README.md) for installation, API surface, and usage guidance instead of duplicating large sections here.
 - Use [examples/core.ts](examples/core.ts) and [examples/nest.ts](examples/nest.ts) as the canonical implementation examples.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked in GitHub Issues via the `gh` CLI; external PRs are not a triage surface. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default label vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout (`CONTEXT.md` + `docs/adr/` at the repo root). See `docs/agents/domain.md`.
