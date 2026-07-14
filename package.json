@@ -1,6 +1,6 @@
 {
   "name": "@zireal/result-kit",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Type-safe result and structured error utilities for TypeScript, with optional NestJS adapters.",
   "license": "MIT",
   "author": "Ali Farooq <alifarooq122@gmail.com>",

@@ -1,5 +1,11 @@
 # @zireal/result-kit
 
+## 1.2.0
+
+### Minor Changes
+
+- e061456: Add richer fluent pipeline helpers and an optional `fp-ts` interop entrypoint.
+
 ## [1.1.0] - 2026-03-30 (Rollback)
 
 - All versions v2.0.0 → v4.0.0 have been unpublished due to critical issues.
