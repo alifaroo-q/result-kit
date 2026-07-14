@@ -95,8 +95,7 @@ const requireSession = (
   return ResultKit.success({ userId: "123" });
 };
 
-const result = ResultKit
-  .pipe("session-token")
+const result = ResultKit.pipe("session-token")
   .andThen(requireSession)
   .andThen((session) => findUser(session.userId))
   .map((user) => user.name)
@@ -112,8 +111,7 @@ const result = ResultKit
 Async pipelines accept both sync and async callbacks for fluent composition:
 
 ```ts
-const displayName = await ResultKit
-  .pipeAsync(Promise.resolve("session-token"))
+const displayName = await ResultKit.pipeAsync(Promise.resolve("session-token"))
   .andThen(requireSession)
   .andThen((session) => Promise.resolve(findUser(session.userId)))
   .map((user) => user.name.toUpperCase())
@@ -130,11 +128,7 @@ Use the optional `@zireal/result-kit/fp-ts` entrypoint when you need to bridge i
 
 ```ts
 import { right } from "fp-ts/Either";
-import {
-  fromEither,
-  toEither,
-  toTaskEither,
-} from "@zireal/result-kit/fp-ts";
+import { fromEither, toEither, toTaskEither } from "@zireal/result-kit/fp-ts";
 
 const result = fromEither(right(42));
 const either = toEither(ResultKit.success(42));
