@@ -68,3 +68,23 @@ export function ok<T>(value?: T): Ok<T | void> {
 export function err<E>(error: E): Err<E> {
   return { ok: false, error };
 }
+
+/**
+ * Narrows a {@link Result} to its successful half.
+ *
+ * Emits a type predicate, so `if (isOk(r)) { r.value }` narrows. Works on any
+ * structurally-valid `Result` — including one parsed from JSON — because the
+ * union carries no brand.
+ */
+export function isOk<T, E>(result: Result<T, E>): result is Ok<T> {
+  return result.ok;
+}
+
+/**
+ * Narrows a {@link Result} to its failed half.
+ *
+ * Emits a type predicate, so `if (isErr(r)) { r.error }` narrows.
+ */
+export function isErr<T, E>(result: Result<T, E>): result is Err<E> {
+  return !result.ok;
+}

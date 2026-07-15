@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
-import { err, ok } from '../../src/index';
+import { err, isErr, isOk, ok } from '../../src/index';
 import type { Err, Ok, Result } from '../../src/index';
 
 /**
@@ -147,5 +147,59 @@ describe('ok / err constructors', () => {
     const e = err(boom);
     expectTypeOf(e).toEqualTypeOf<Err<Error>>();
     expect(e.error).toBe(boom);
+  });
+});
+
+describe('isOk / isErr guards', () => {
+  // §5.1: guards emit type predicates, not plain booleans.
+  // `if (isOk(r)) { r.value }` must narrow — that is the acceptance criterion.
+  it('narrows to Ok', () => {
+    const r = asResult<number, string>(ok(1));
+    if (isOk(r)) {
+      expectTypeOf(r).toEqualTypeOf<Ok<number>>();
+      expect(r.value).toBe(1);
+    } else {
+      expectTypeOf(r).toEqualTypeOf<Err<string>>();
+      throw new Error('unreachable');
+    }
+  });
+
+  it('narrows to Err', () => {
+    const r = asResult<number, string>(err('boom'));
+    if (isErr(r)) {
+      expectTypeOf(r).toEqualTypeOf<Err<string>>();
+      expect(r.error).toBe('boom');
+    } else {
+      expectTypeOf(r).toEqualTypeOf<Ok<number>>();
+      throw new Error('unreachable');
+    }
+  });
+
+  it('returns the right boolean for both halves', () => {
+    expect(isOk(ok(1))).toBe(true);
+    expect(isOk(err('boom'))).toBe(false);
+    expect(isErr(err('boom'))).toBe(true);
+    expect(isErr(ok(1))).toBe(false);
+  });
+
+  // Guards must key off the discriminant, not truthiness of the payload.
+  it('reports ok for a falsy success value', () => {
+    expect(isOk(ok(0))).toBe(true);
+    expect(isOk(ok(null))).toBe(true);
+    expect(isOk(ok())).toBe(true);
+    expect(isErr(err(undefined))).toBe(true);
+  });
+
+  // §2.1 + §2 together: the guards work on an object that was never built by
+  // `ok()` — this is the no-brand invariant paying off end to end, and it is
+  // the ticket's headline acceptance criterion.
+  it('narrows a JSON-revived result with no re-wrapping', () => {
+    const wire = JSON.stringify(ok({ id: '123' }));
+    const revived = JSON.parse(wire) as Result<{ id: string }, string>;
+
+    expect(isOk(revived)).toBe(true);
+    if (!isOk(revived)) throw new Error('unreachable');
+    expectTypeOf(revived).toEqualTypeOf<Ok<{ id: string }>>();
+    expect(revived.value.id).toBe('123');
   });
 });
