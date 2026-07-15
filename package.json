@@ -28,18 +28,9 @@
     "test:cov": "vitest run --coverage",
     "check": "tsc --noEmit"
   },
-  "peerDependencies": {
-    "@nestjs/common": "^11.0.0"
-  },
-  "peerDependenciesMeta": {
-    "@nestjs/common": {
-      "optional": true
-    }
-  },
   "devDependencies": {
     "@arethetypeswrong/core": "^0.18.2",
     "@changesets/cli": "^2.30.0",
-    "@nestjs/common": "^11.1.17",
     "@types/node": "^22.19.15",
     "publint": "^0.3.18",
     "tsdown": "^0.21.4",
@@ -70,8 +61,5 @@
       "require": "./dist/nest/index.cjs"
     },
     "./package.json": "./package.json"
-  },
-  "dependencies": {
-    "fp-ts": "^2.16.11"
   }
 }
