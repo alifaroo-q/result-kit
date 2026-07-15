@@ -309,11 +309,17 @@ Entering the async-result world from a raw promise is a **construction** concern
 Source: [ADR 0007](../adr/0007-v2-do-notation-helper.md). Ships in 5.0.0, not deferred — it is the ergonomic the research crowned highest-ROI, and the "lean **and** ergonomic" thesis promises it at launch.
 
 ```ts
-export function safeTry<T, E>(gen: () => Generator<..., Result<T, E>>): Result<T, E>;
-export function safeTry<T, E>(gen: () => AsyncGenerator<..., Result<T, E>>): Promise<Result<T, E>>;
+type ErrorOf<Y> = Y extends Err<infer E> ? E : never;   // internal — not exported
 
-export function safeUnwrap<T, E>(result: Result<T, E>): Generator<..., T>;
-export function safeUnwrap<T, E>(result: Promise<Result<T, E>>): AsyncGenerator<..., T>;
+export function safeTry<Y extends Err<unknown>, T = never, E = never>(
+  gen: () => Generator<Y, Result<T, E>>,
+): Result<T, E | ErrorOf<Y>>;
+export function safeTry<Y extends Err<unknown>, T = never, E = never>(
+  gen: () => AsyncGenerator<Y, Result<T, E>>,
+): Promise<Result<T, E | ErrorOf<Y>>>;
+
+export function safeUnwrap<T, E>(result: Result<T, E>): Generator<Err<E>, T>;
+export function safeUnwrap<T, E>(result: Promise<Result<T, E>>): AsyncGenerator<Err<E>, T>;
 ```
 
 ```ts
@@ -343,7 +349,27 @@ Five constraints:
 
 Both names are neverthrow's, making the highest-value migration path zero-surprise. `safeUnwrap` is deliberately not bare `unwrap` (§5.3 cut that token).
 
-> **Implementation note.** The `…` in the yield positions above elides the generator's yield/next types, which are an implementation concern: they must thread the short-circuit `Err` through `safeTry` while keeping each `yield*`'s bound type precise. The prototype battery in [`prototype/define-error/`](../../prototype/define-error/README.md) covers `defineError` only — **`safeTry`/`safeUnwrap` have no prototype**, and their generic plumbing is the single most inference-sensitive part of this spec. Build them first and assert the types.
+> **Implementation note — resolved by [#23](https://github.com/alifarooq-zk/result-kit/issues/23) (2026-07-16).** The signatures above are the verdict of a prototype (since deleted); the plumbing they encode is not decoration, and two details are load-bearing in ways no happy-path call site reveals.
+>
+> 1. **`Y` is a naked type parameter.** Spelling the yield slot `Generator<Err<E>, …>` — the obvious reading of this section's earlier sketch — makes TypeScript decompose the yielded union into one inference candidate per constituent and keep only the **first**, silently collapsing `E₁ | E₂` to `E₁`. A naked `Y` captures the union whole; the distributive `ErrorOf<Y>` unpacks it again.
+> 2. **`T` and `E` default to `never`.** In a body whose only exit is `return ok(v)`, nothing matches the `Err<E>` arm, so `E` draws no inference candidate and falls back to `unknown` — and `unknown | ErrorOf<Y>` swallows the accumulated union. A default applies exactly when inference finds no candidate, so a body that *does* `return err(…)` still infers `E` from it normally.
+>
+> **One caveat, and it is not fixable here.** TypeScript **subtype-reduces** a generator's yield type across `yield*` delegations: any yielded error that is a subtype of another yielded error is **dropped**, and the channel keeps only the supertype. This happens in the generator expression itself — with no `safeTry` and no contextual type in sight — so it is upstream of this signature, and no signature can recover it ([microsoft/TypeScript#57625](https://github.com/microsoft/TypeScript/issues/57625), open and unmilestoned since March 2024; neverthrow has the same bug and has not fixed it).
+>
+> It bites in two shapes, both pinned in `test/core/do-notation.spec.ts` under *"the known limitation, pinned"*:
+>
+> - **A hierarchy widens.** `class NotFoundError extends HttpError` yielded alongside an `HttpError` gives `Result<T, HttpError>` — `NotFoundError` is gone, and `error.path` is unreachable without a cast. Structural subtyping does the same: `{type, message, id}` beside `{type, message}` loses `id`.
+> - **Lookalikes merge.** Mutually assignable types (two structurally identical `Error` subclasses) are just the special case where each is a subtype of the other. Here nothing is really lost — TypeScript already treats them as one type.
+>
+> **Judged not to warrant escalation**, on these grounds — note the first is weaker than the hierarchy case might suggest, so state it carefully:
+>
+> - It is **lossy but never unsound.** The survivor is always a supertype of what was dropped, so the channel *widens* and never names an error that cannot occur. A consumer handling `HttpError` handles a `NotFoundError` correctly; it just cannot see the narrower type. (For lookalikes it is not even lossy.) It is **not** true in general that "the channel is no less precise than the language" — for the hierarchy case it plainly is less precise, since `const e: NotFoundError = new HttpError()` is rightly an error.
+> - **No §3 `TypedError` can hit it.** Distinct literal `type` discriminants make variants mutually non-assignable, so neither is a subtype of the other and the union survives intact. This is the path the spec's own error convention puts consumers on, and it is verified.
+> - It is **not ours to fix**, and the alternative is never shipping.
+>
+> §2 keeps `E` fully generic and `TypedError` opt-in, so error-class hierarchies are a reachable path and consumers on one should know the channel widens. If a future TypeScript fixes #57625, those pinned assertions fail and this caveat can be dropped.
+>
+> These assertions live under `tsc --noEmit`, not `vitest`. Both traps produce **no runtime error whatsoever** — a collapsed union is invisible until a consumer handles an error the types said could not occur.
 
 ### 5.8 Public types
 
@@ -637,7 +663,7 @@ npm deprecate "@zireal/result-kit@1.x" \
 
 ## 9. Execution checklist
 
-Suggested order — §9.2 is deliberately first after the teardown, because §5.7's generator typing is the highest-risk unknown in the spec.
+Suggested order — §9.2 was deliberately first after the teardown, because §5.7's generator typing was the highest-risk unknown in the spec. It is now settled; §5.2's transform overloads are the remaining inference-sensitive area.
 
 ### 9.1 Teardown
 
@@ -648,15 +674,15 @@ Suggested order — §9.2 is deliberately first after the teardown, because §5.
 
 ### 9.2 Highest-risk first
 
-- [ ] **`safeTry` / `safeUnwrap` (§5.7)** — build and type-assert the generator plumbing before anything depends on it. No prototype exists; the yield/next typing is the most inference-sensitive part of the spec. If it cannot be typed as specified, that is a decision to escalate, not to work around.
+- [x] **`safeTry` / `safeUnwrap` (§5.7)** — **done ([#23](https://github.com/alifarooq-zk/result-kit/issues/23), 2026-07-16).** Types as specified; no escalation. The yield/next plumbing is resolved in §5.7's implementation note — read it before touching `src/core/do-notation.ts`, because the naive signature compiles and is wrong. One upstream caveat recorded there, which the §3 `TypedError` convention cannot hit.
 - [ ] **The §5.2 transform overloads** — the second inference-sensitive area. Acceptance: `andThen(fetchUser(id), validate)` typechecks and infers correctly when `fetchUser` returns `Promise<Result>`.
 
 ### 9.3 Core (`src/core/` → root barrel)
 
 - [ ] `Ok<T>` / `Err<E>` / `Result<T, E>` (§2) — rename from `Success`/`Failure`.
 - [ ] `ok` / `err` / `isOk` / `isErr` (§5.1) with narrow returns and type predicates.
-- [ ] `TypedError` + `defineError` + `ErrorCtor` (§3) — port from [`prototype/define-error/`](../../prototype/define-error/README.md), then **delete the prototype** (it is throwaway).
-- [ ] `isTypedError` (§5.1); cut `TypedErrorOf` / `TypedErrorUnion`.
+- [x] `TypedError` + `defineError` + `ErrorCtor` (§3) — **done.** The prototype it was ported from is deleted, as planned; the verdict lives in ADR 0002 §4.
+- [x] `isTypedError` (§5.1) — **done**; `TypedErrorOf` / `TypedErrorUnion` cut.
 - [ ] Transforms (§5.2), terminals (§5.3), collections (§5.4), interop (§5.5), async constructors (§5.6).
 - [ ] `OkTypeOf` / `ErrTypeOf` (§5.8).
 - [ ] Assert the §2.1 JSON round-trip guarantee in tests.
@@ -759,7 +785,7 @@ Found while breaking this spec into execution tickets — the fourth seam consol
 | §5.4 collections | ADR 0004 §1, ADR 0005 §2 | sync-only; `OkTypeOf`/`ErrTypeOf` → §10.2 |
 | §5.5 interop | ADR 0004 §1 | — |
 | §5.6 async constructors | ADR 0005 §3 | — |
-| §5.7 do-notation | ADR 0007 | no prototype exists |
+| §5.7 do-notation | ADR 0007 + prototype [#23](https://github.com/alifarooq-zk/result-kit/issues/23) | yield typing resolved in §5.7's note; `safeUnwrap` name → ADR 0007 §5 |
 | §5.8 public types | ADR 0004 §1, ADR 0002 §4 | publicness → §10.2 |
 | **§6.1 `ResultChain`** | ADR 0004 §2, ADR 0007 §2 | **name → §10.1** |
 | **§6.2 `ResultAsync`** | ADR 0005 §4–5 + **ADR 0009** | placement/safety from 0005; **member list from 0009** |

@@ -1,3 +1,4 @@
+export { safeTry, safeUnwrap } from './core/do-notation';
 export {
   defineError,
   isTypedError,
