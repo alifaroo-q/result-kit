@@ -29,37 +29,20 @@
     "check": "tsc --noEmit"
   },
   "devDependencies": {
-    "@arethetypeswrong/core": "^0.18.2",
+    "@arethetypeswrong/core": "^0.18.5",
     "@changesets/cli": "^2.30.0",
     "@types/node": "^22.19.15",
     "publint": "^0.3.18",
-    "tsdown": "^0.21.4",
-    "typescript": "^5.9.3",
+    "tsdown": "^0.22.8",
+    "typescript": "^7.0.2",
     "vitest": "^3.2.4"
   },
   "engines": {
     "node": ">=20.0.0"
   },
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.mjs",
   "types": "./dist/index.d.cts",
   "exports": {
-    ".": {
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.cjs"
-    },
-    "./core": {
-      "import": "./dist/core/index.mjs",
-      "require": "./dist/core/index.cjs"
-    },
-    "./fp-ts": {
-      "import": "./dist/fp-ts/index.mjs",
-      "require": "./dist/fp-ts/index.cjs"
-    },
-    "./nest": {
-      "import": "./dist/nest/index.mjs",
-      "require": "./dist/nest/index.cjs"
-    },
+    ".": "./../../../../../tmp/claude-1000/-home-alifarooq-Documents-Workspace-result-kit/98fc561f-7a04-4969-86f0-356a63937d8e/scratchpad/dts-probe/index.mjs",
     "./package.json": "./package.json"
   }
 }
