@@ -72,6 +72,10 @@ const total = await safeTry(async function* () {
 
 Both names are taken from **neverthrow** (~1.67M downloads/wk — the dominant incumbent per research), where they are *the* established pair for this pattern, making the highest-value migration path zero-surprise. The `safeUnwrap` adapter is deliberately **not** bare `unwrap` (ADR 0004 cut that token because "unwrap = throws" across the genre); `safeUnwrap` is unambiguous, says exactly what it does at the call site, and only ever appears inside a `safeTry` block.
 
+> **Amendment (2026-07-16, during [#23](https://github.com/alifarooq-zk/result-kit/issues/23)).** Half of this rationale has since expired, and a later reader should not cite it as written. `safeTry` is still current in neverthrow, but **`safeUnwrap` was deprecated in neverthrow 8.1.0** (`@deprecated will be removed in 9.0.0`): they moved iterability onto `Ok`/`Err` via `Symbol.iterator`, so their consumers now write `yield* result` with no adapter call. A migrating user therefore meets `safeUnwrap` here as a required free function, having just been told upstream to stop calling it as a method — same token, different status, different shape. "Zero-surprise" now overstates it.
+>
+> **The decision stands, on §2's reasoning rather than this section's.** The name is kept: it is self-describing, §5's ban on bare `unwrap` is untouched, and renaming after 5.0.0 would be breaking. Note this does **not** reopen §2 — neverthrow can put `Symbol.iterator` on its data because its data is already a class; ours is a plain union whose no-brand / JSON guarantee (ADR 0003) is the keystone the adapter exists to protect. Their convergence on iterable data is a consequence of their shape, not evidence against ours.
+
 ### 6. Type contract — explicit `Result` return, union-accumulated error channel
 
 - The generator **returns a `Result` explicitly** (`return ok(value)` / early `return err(e)`); `safeTry` returns that `Result` directly rather than auto-wrapping a bare value. This matches the explicit-core ethos and neverthrow's contract, and permits a deliberate early `return err(...)`.
