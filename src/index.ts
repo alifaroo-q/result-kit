@@ -15,6 +15,13 @@ export {
   type Result,
 } from './core/result';
 export {
+  match,
+  toNullable,
+  unwrapOr,
+  unwrapOrElse,
+  unwrapOrThrow,
+} from './core/terminals';
+export {
   andThen,
   inspect,
   inspectErr,
