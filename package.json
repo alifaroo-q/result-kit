@@ -38,11 +38,15 @@
     "vitest": "^3.2.4"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.12"
   },
-  "types": "./dist/index.d.cts",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./../../../../../tmp/claude-1000/-home-alifarooq-Documents-Workspace-result-kit/98fc561f-7a04-4969-86f0-356a63937d8e/scratchpad/dts-probe/index.mjs",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
     "./package.json": "./package.json"
   }
 }
