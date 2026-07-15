@@ -469,8 +469,10 @@ The five terminals are **additive and touch none of these three** — no termina
 
 ### 6.3 Complete `/fluent` export list
 
-**Values (5):** `ok` `err` `from` `safeTry` `ResultAsync`
+**Values (7):** `ok` `err` `from` `safeTry` `fromPromise` `fromThrowableAsync` `ResultAsync`
 **Types (2):** `ResultChain` `ResultAsync`
+
+> **Amended 2026-07-15 — was "Values (5)", omitting `fromPromise` / `fromThrowableAsync`.** That list contradicted §4's dual-constructor rule and [ADR 0005 §4](../adr/0005-v2-async-strategy.md)'s placement table, both of which place both async constructors at **both** entrypoints. §4 wins. See §10.5.
 
 ```ts
 export function ok(): ResultChain<void, never>;
@@ -480,9 +482,17 @@ export function from<T, E>(result: Result<T, E>): ResultChain<T, E>;
 
 export function safeTry<T, E>(gen: () => Generator<..., Result<T, E>>): ResultChain<T, E>;
 export function safeTry<T, E>(gen: () => AsyncGenerator<..., Result<T, E>>): ResultAsync<T, E>;
+
+// dual constructors — §4, ADR 0005 §4. Same names as root, wrapper return types.
+export function fromPromise<T, E>(promise: Promise<T>, onReject: (error: unknown) => E): ResultAsync<T, E>;
+export function fromThrowableAsync<Args extends unknown[], T, E>(
+  fn: (...args: Args) => Promise<T>,
+  onReject: (error: unknown) => E,
+): (...args: Args) => ResultAsync<T, E>;
 ```
 
 - **`/fluent` has no `safeUnwrap`** — the wrapper is self-iterable, so `yield* chain` works directly. Root's `safeUnwrap` remains available for unwrapping a *plain* union inside a fluent `safeTry`.
+- **`fromPromise` ≠ `ResultAsync.from`.** `ResultAsync.from` lifts a `Promise<Result<T, E>>` that is *already* a union; `fromPromise` catches a rejection off a raw `Promise<T>` into the `E` channel. Neither substitutes for the other, which is why omitting `fromPromise` here would have left a `/fluent` user no rejection-catching entry into the wrapper without importing from root — breaking core/wrapper symmetry in the opposite direction to the one §4 guards.
 - **`ResultChain` is exported as a type; instances come from `ok`/`err`/`from`/`safeTry`.** `ResultAsync` is exported as a **value** (class) because [ADR 0005 §4](../adr/0005-v2-async-strategy.md) specifies the static `ResultAsync.from(promiseOfResult)`. The asymmetry — free `from` for sync, static `ResultAsync.from` for async — is as-decided; do not "fix" it without a new decision.
 
 ## 7. Packaging
@@ -686,7 +696,9 @@ Suggested order — §9.2 is deliberately first after the teardown, because §5.
 
 The map's eight ADRs left four things open — all four found by consolidating them here, which is exactly the pressure eight separate documents don't apply. Three are decided in this document (§10.1–§10.3); the fourth was substantial enough to earn its own ADR (§10.4).
 
-§10.1–§10.3 are recorded here rather than in an ADR **by choice**: they are naming and export-visibility calls with no real argument trail. §10.4 is not — it corrects a misreading of an accepted ADR, so it needed to reach ADR readers.
+A **fifth** (§10.5) surfaced later still, when this spec was broken into execution tickets. Consolidation catches what eight documents miss; **ticketing catches what consolidation misses** — reading the spec as a builder, not an author, is its own kind of pressure. Worth carrying forward: a document can be internally consistent everywhere a reader looks and still contradict itself between two sections no one read together.
+
+§10.1–§10.3 are recorded here rather than in an ADR **by choice**: they are naming and export-visibility calls with no real argument trail. §10.4 is not — it corrects a misreading of an accepted ADR, so it needed to reach ADR readers. §10.5 is an erratum against an accepted ADR that already decided the question, so it stays here too.
 
 ### 10.1 The fluent wrapper is named `ResultChain` — **decided**
 
@@ -719,7 +731,18 @@ ADR 0005 §2 is scoped to the **functional core** — its heading says so — an
 
 The question was then grilled properly and decided in **[ADR 0009](../adr/0009-v2-resultasync-surface.md)**: five `Promise`-lifted value-terminals with sync handlers, no `isOk`/`isErr`, a throwing `toJSON()`, and `[Symbol.asyncIterator]`. §6.2 carries the surface; ADR 0009 carries the rationale and the rejected alternatives.
 
-**This spec no longer contains an open question.**
+### 10.5 `/fluent` exports the async constructors — **decided (2026-07-15, at ticketing)**
+
+Found while breaking this spec into execution tickets — the fourth seam consolidation-pressure surfaced, and the first found by *reading the spec as a builder* rather than as an author.
+
+§6.3 headed itself **"Complete `/fluent` export list"** and listed five values, omitting `fromPromise` / `fromThrowableAsync`. But **§4 states** that `ok`/`err`/`safeTry`/`fromPromise`/`fromThrowableAsync` exist at both entrypoints, and **[ADR 0005 §4](../adr/0005-v2-async-strategy.md)'s placement table** is explicit: `/fluent`'s `fromPromise` / `fromThrowableAsync` return a `ResultAsync`. A "complete" list and an accepted ADR cannot both be right.
+
+**§4 and ADR 0005 win; §6.3 was an incomplete list, now amended to seven values.** The decisive argument is that the two are not interchangeable: `ResultAsync.from` lifts an already-`Result` promise, while `fromPromise` catches a rejection off a raw `Promise<T>`. Under the five-value reading, a `/fluent` user entering from a throwing promise **must** import from root — precisely the cross-entrypoint dependency ADR 0005 §4 rejected when it ruled that async constructors cannot live *only* at `/fluent`. The same reasoning forbids them living only at root.
+
+- **Rejected — five values, no async constructors at `/fluent`.** A smaller surface, but it contradicts an accepted ADR's explicit table and §4 of this document; §6.3 is the outlier and the only text asserting it.
+- **Not escalated to an ADR.** Unlike §10.4, this corrects no misreading and reverses no decision — ADR 0005 §4 already decided it. §6.3 simply failed to carry it. That makes this an erratum, which is what §10 is for.
+
+**This spec no longer contains an open question** — for the second time, which is itself the point. The map twice declared the fog cleared before it was; this document has now done it once. Treat "no open questions" as a claim with a short half-life, not a property.
 
 ## 11. Traceability
 
@@ -739,7 +762,7 @@ The question was then grilled properly and decided in **[ADR 0009](../adr/0009-v
 | §5.8 public types | ADR 0004 §1, ADR 0002 §4 | publicness → §10.2 |
 | **§6.1 `ResultChain`** | ADR 0004 §2, ADR 0007 §2 | **name → §10.1** |
 | **§6.2 `ResultAsync`** | ADR 0005 §4–5 + **ADR 0009** | placement/safety from 0005; **member list from 0009** |
-| §6.3 `/fluent` exports | ADR 0001 §4, ADR 0005 §4, ADR 0007 §3 | `safeUnwrap` stays out — ADR 0009 §5 |
+| §6.3 `/fluent` exports | ADR 0001 §4, ADR 0005 §4, ADR 0007 §3 | `safeUnwrap` stays out — ADR 0009 §5; **async constructors in — §10.5** |
 | §7 packaging | ADR 0006 | — |
 | §8 migration & release | ADR 0008 | — |
 | §9.7 repo hygiene | ADR 0008 Consequences | — |
