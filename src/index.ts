@@ -1,1 +1,9 @@
-export { err, ok, type Err, type Ok, type Result } from './core/result';
+export {
+  err,
+  isErr,
+  isOk,
+  ok,
+  type Err,
+  type Ok,
+  type Result,
+} from './core/result';
