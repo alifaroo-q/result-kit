@@ -14,3 +14,11 @@ export {
   type Ok,
   type Result,
 } from './core/result';
+export {
+  andThen,
+  inspect,
+  inspectErr,
+  map,
+  mapErr,
+  orElse,
+} from './core/transforms';

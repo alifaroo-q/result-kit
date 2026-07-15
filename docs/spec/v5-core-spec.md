@@ -204,6 +204,11 @@ export function isTypedError(x: unknown): x is TypedError;
 
 The contract in one line: **one name, no `Async` suffix, input drives output.** A plain `Result` in yields a `Result` out; a `Promise<Result>` **or** an async callback yields a `Promise<Result>` out.
 
+> **Two amendments from building this (#24).** Both are recorded in §10.6 and reflected in `src/core/transforms.ts`; the block below stays as originally written, because it is the clearest statement of the *contract*. It is no longer a literal transcription target.
+>
+> 1. **The promise arm takes `PromiseLike<Result<T, E>>`, not `Promise<Result<T, E>>`** (§10.6) — otherwise `ResultAsync`, which implements `PromiseLike`, cannot flow into the core it is supposed to delegate to.
+> 2. **The arm order below is presentational and must be inverted in code.** TypeScript takes the first matching overload, so the async-callback arm has to be declared *before* the sync arm. Written literally, `map`'s `fn: (value: T) => U` captures an async callback with `U = Promise<X>` and returns `Result<Promise<X>, E>`; `inspect` is worse, because `() => Promise<void>` is assignable to `() => void` under the void-return rule, so the sync arm silently drops the await. Neither fails at runtime — see the note at the top of `transforms.ts`.
+
 ```ts
 // map
 export function map<T, U, E>(result: Result<T, E>, fn: (value: T) => U): Result<U, E>;
@@ -675,7 +680,7 @@ Suggested order — §9.2 was deliberately first after the teardown, because §5
 ### 9.2 Highest-risk first
 
 - [x] **`safeTry` / `safeUnwrap` (§5.7)** — **done ([#23](https://github.com/alifarooq-zk/result-kit/issues/23), 2026-07-16).** Types as specified; no escalation. The yield/next plumbing is resolved in §5.7's implementation note — read it before touching `src/core/do-notation.ts`, because the naive signature compiles and is wrong. One upstream caveat recorded there, which the §3 `TypedError` convention cannot hit.
-- [ ] **The §5.2 transform overloads** — the second inference-sensitive area. Acceptance: `andThen(fetchUser(id), validate)` typechecks and infers correctly when `fetchUser` returns `Promise<Result>`.
+- [x] **The §5.2 transform overloads** — **done ([#24](https://github.com/alifarooq-zk/result-kit/issues/24), 2026-07-16).** Acceptance met: `andThen(fetchUser(id), validate)` infers `Promise<Result<User, NotFound | Forbidden>>`. Two amendments came out of it, both in §10.6 and both invisible at runtime: the promise arm takes `PromiseLike`, and §5.2's arm *order* must be inverted in code. Read the note at the top of `src/core/transforms.ts` before touching the overloads — as with §5.7, the naive transcription compiles and is wrong.
 
 ### 9.3 Core (`src/core/` → root barrel)
 
@@ -683,7 +688,7 @@ Suggested order — §9.2 was deliberately first after the teardown, because §5
 - [ ] `ok` / `err` / `isOk` / `isErr` (§5.1) with narrow returns and type predicates.
 - [x] `TypedError` + `defineError` + `ErrorCtor` (§3) — **done.** The prototype it was ported from is deleted, as planned; the verdict lives in ADR 0002 §4.
 - [x] `isTypedError` (§5.1) — **done**; `TypedErrorOf` / `TypedErrorUnion` cut.
-- [ ] Transforms (§5.2), terminals (§5.3), collections (§5.4), interop (§5.5), async constructors (§5.6).
+- [ ] Transforms (§5.2) — **done ([#24](https://github.com/alifarooq-zk/result-kit/issues/24))**; terminals (§5.3), collections (§5.4), interop (§5.5), async constructors (§5.6).
 - [ ] `OkTypeOf` / `ErrTypeOf` (§5.8).
 - [ ] Assert the §2.1 JSON round-trip guarantee in tests.
 
@@ -769,7 +774,40 @@ Found while breaking this spec into execution tickets — the fourth seam consol
 - **Rejected — five values, no async constructors at `/fluent`.** A smaller surface, but it contradicts an accepted ADR's explicit table and §4 of this document; §6.3 is the outlier and the only text asserting it.
 - **Not escalated to an ADR.** Unlike §10.4, this corrects no misreading and reverses no decision — ADR 0005 §4 already decided it. §6.3 simply failed to carry it. That makes this an erratum, which is what §10 is for.
 
-**This spec no longer contains an open question** — for the second time, which is itself the point. The map twice declared the fog cleared before it was; this document has now done it once. Treat "no open questions" as a claim with a short half-life, not a property.
+### 10.6 The transforms' promise arm takes `PromiseLike` — **decided (2026-07-16, at build)**
+
+Found while building §5.2 ([#24](https://github.com/alifarooq-zk/result-kit/issues/24)) — the fifth seam, and the first surfaced by neither consolidation nor ticketing but by **writing the code**. §10.5 predicted the pattern; here it is again one rung down.
+
+§5.2 renders the promise-input arm as `Promise<Result<T, E>>` and implies the obvious runtime check, `instanceof Promise`. **That pair is unsound, and the flaw is in the check, not the type.**
+
+`instanceof Promise` asks which *realm* an object was born in, not what it is. A genuine, native promise from a `vm` context, a worker, or an iframe is a `Promise<Result<T, E>>` to TypeScript — it type-checks, and it `await`s correctly — while `instanceof Promise` returns `false` for it:
+
+```
+typeof foreign.then       // 'function'
+foreign instanceof Promise // false   ← native Promise, different realm
+await foreign              // { ok: true, value: 42 }   ← awaits fine
+```
+
+Run that through §5.2's promise arm with an `instanceof` check and the failure is silent and total: the check says "not a promise", the value falls into the plain-`Result` path, `.ok` reads `undefined`, the err branch is taken, and the transform **returns the raw promise typed as `Result<U, E>`**. No throw, no rejection — a wrong value with a confident type. Pinned by the cross-realm regression test in `test/core/transforms.spec.ts`.
+
+**So the check becomes `typeof x?.then === 'function'`, and the arm widens to `PromiseLike<Result<T, E>>` to match it.** The check is the decision; the widening is what keeps the types honest about it, because a runtime that accepts any thenable while the signature promises `Promise` is just the same lie pointing the other way. The return type stays `Promise<Result<T, E>>`: accept the loosest thing that can be awaited, hand back the concrete thing consumers expect — `Promise.resolve()` normalizes at the boundary. It is a pure widening; every `Promise` is a `PromiseLike`, so no call site §5.2 admits is lost.
+
+The deeper reason: `await` and `Promise.resolve` are **defined** on thenables, not on `instanceof`. The language's own contract is structural here, and a library branching on `instanceof` is the thing deviating. A `Result` is `{ ok, value }` / `{ ok, error }` and never carries a `then`, so the check cannot misfire on the union.
+
+`ResultAsync` (§6.2) implements `PromiseLike` and so flows into the core transforms for free under this rule — **but it is a beneficiary, not the reason.** An earlier draft of this section argued the reverse: that §4's delegation rule *required* the widening, because `ResultChain.map` would otherwise have nothing to delegate to. **That argument was wrong and is withdrawn.** `ResultAsync.from` takes a real `Promise` and the wrapper delegates *that internal promise*, never `this` — and §6.2's second safety property says so directly ("the functional core hands you `Promise<Result>` directly, so nobody ever *has* to touch `ResultAsync`"). The widening would be correct with `/fluent` deleted.
+
+- **Rejected — widen the runtime check only, keep §5.2's `Promise` types.** No spec deviation, and it fixes the cross-realm bug. But it leaves the signature narrower than the behaviour, so a caller holding a `PromiseLike` is told no by a function that would have handled it. Types should describe what the code does.
+- **Rejected — keep both, and document "pass real promises only".** Unenforceable: the offending value type-checks. A rule the compiler cannot state is not a rule.
+- **Not escalated to an ADR.** It reverses no decision and corrects no misreading of one; ADR 0005 §2 fixed the *shape* of these overloads and is untouched. This corrects an unsound runtime check the spec never actually specified. That is an erratum.
+
+**Known debt:** `safeUnwrap` (§5.7, shipped in [#23](https://github.com/alifarooq-zk/result-kit/issues/23)) branches on `instanceof Promise` and has the identical cross-realm hole — `safeUnwrap(foreignPromise)` takes the sync branch and yields a malformed `Err`. Out of #24's scope; raised on [#28](https://github.com/alifarooq-zk/result-kit/issues/28). Note this is **not** about `yield* resultAsync`, which routes through §6.2's own `[Symbol.asyncIterator]` and never reaches `safeUnwrap`.
+
+**This spec no longer contains an open question** — for the third time. Each pass applies pressure the last could not: §10.1–§10.4 came from consolidating eight ADRs, §10.5 from reading the spec as a builder, §10.6 from *being* one. Treat "no open questions" as a claim with a short half-life, not a property.
+
+**And a note on this section's own reliability**, earned the hard way. §10.6 shipped with a **wrong** decisive argument — a delegation requirement that §6.2 flatly contradicts, invented rather than verified, and caught only when someone asked "was that a good call?" *after* the code was green. The decision survived; the reasoning did not. Two things follow, and they cost nothing to state:
+
+1. **A right answer reached by a wrong argument is not a right decision** — it is a coin landing well. It survives until someone reasons *from* the recorded rationale, which is the entire purpose of writing one down.
+2. **The pass that catches this is the retro**, and it has no ticket. Consolidation, ticketing, and building each have a moment that forces them; asking "was that actually right?" after the tests pass has none. Green is not the end of the loop.
 
 ## 11. Traceability
 
@@ -780,7 +818,7 @@ Found while breaking this spec into execution tickets — the fourth seam consol
 | §3 `TypedError` / `defineError` | ADR 0002 + prototype [#17](https://github.com/alifarooq-zk/result-kit/issues/17) | — |
 | §4 architecture | ADR 0001 | — |
 | §5.1 constructors & guards | ADR 0003 §6, ADR 0002 §5 | `isTypedError` signature → §10.3 |
-| **§5.2 transforms** | **ADR 0004 §1 + ADR 0005 §2** | **merged here; 0005 supersedes 0004** |
+| **§5.2 transforms** | **ADR 0004 §1 + ADR 0005 §2** | **merged here; 0005 supersedes 0004**; `PromiseLike` arm + arm order → §10.6 |
 | §5.3 terminals | ADR 0004 §1, ADR 0005 §2 | sync-only |
 | §5.4 collections | ADR 0004 §1, ADR 0005 §2 | sync-only; `OkTypeOf`/`ErrTypeOf` → §10.2 |
 | §5.5 interop | ADR 0004 §1 | — |
