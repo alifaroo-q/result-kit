@@ -42,15 +42,24 @@ const UNWRAP_FAILED = 'unwrapOrThrow called on an Err';
  * That is a hard compile error, not a subtle degradation. A slot per callback
  * infers the union where the branches genuinely differ and still collapses to a
  * plain `string` — not `string | string` — where they agree, which is what §5.3
- * asks for in prose. Only the type parameters' arity changes; the value
- * signature is the spec's. The same presentational-vs-actual gap the transform
- * arms hit, and the same resolution.
+ * asks for in prose. The same presentational-vs-actual gap the transform arms
+ * hit, and the same resolution.
  *
- * The cost: an explicit `match<User, NotFound, string>(...)` no longer matches
- * the arity. Nothing in the spec promises explicit type arguments here, and
- * inference covers every call site.
+ * **`UErr` defaults to `UOk`**, which is what keeps this a strict superset of
+ * §5.3 rather than a trade. The default is consulted only when inference finds
+ * no candidate for `UErr` — which happens exactly when a caller supplies type
+ * arguments explicitly — so the spec's own call shape means what it says:
+ *
+ * ```ts
+ * match<User, NotFound, string>(r, { ok: …, err: … });   // one U, both branches
+ * match<User, NotFound, number, string>(r, { ok: …, err: … });   // when they differ
+ * ```
+ *
+ * Both branches are still held to that single `string` in the arity-3 form. A
+ * `cases` object always supplies an `err`, so the default never fires on an
+ * inferred call and cannot silently collapse the union.
  */
-export function match<T, E, UOk, UErr>(
+export function match<T, E, UOk, UErr = UOk>(
   result: Result<T, E>,
   cases: { ok: (value: T) => UOk; err: (error: E) => UErr },
 ): UOk | UErr {
