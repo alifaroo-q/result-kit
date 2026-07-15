@@ -247,7 +247,7 @@ export function inspectErr<T, E>(result: Promise<Result<T, E>>, fn: (error: E) =
 ### 5.3 Terminals (5) — **strictly synchronous**
 
 ```ts
-export function match<T, E, U>(result: Result<T, E>, cases: { ok: (value: T) => U; err: (error: E) => U }): U;
+export function match<T, E, UOk, UErr = UOk>(result: Result<T, E>, cases: { ok: (value: T) => UOk; err: (error: E) => UErr }): UOk | UErr;
 export function unwrapOr<T, E>(result: Result<T, E>, defaultValue: T): T;
 export function unwrapOrElse<T, E>(result: Result<T, E>, fn: (error: E) => T): T;
 export function unwrapOrThrow<T, E>(result: Result<T, E>, message?: string): T;   // NEW — throws on Err
@@ -255,6 +255,13 @@ export function toNullable<T, E>(result: Result<T, E>): T | null;
 ```
 
 **Terminals do not overload over promises.** You `await` before a terminal — natural, since a terminal ends the chain — so unifying them buys nothing and only degrades inference.
+
+> **Amendment from building this ([#25](https://github.com/alifarooq-zk/result-kit/issues/25), 2026-07-16).** `match`'s signature above is **amended, not merely annotated** — the earlier `match<T, E, U>` is the one signature in this spec that contradicted its own prose, and it is corrected in place.
+>
+> 1. **A slot per branch, `UOk | UErr`.** A single naked `U` across both callbacks cannot deliver the union this section's last bullet requires. TypeScript collects `U`'s inference candidates and takes the **first** rather than unioning them, so `U` locks to the `ok` branch and the `err` branch is rejected: `match(r, { ok: (v) => v.n, err: () => 'fallback' })` fails with *string is not assignable to number*. That is a hard compile error at the call site, not a silent degradation — unlike §5.2's arms, this one cannot ship and be discovered later. The same first-candidate-wins rule §5.7 note 1 hit from the other direction.
+> 2. **`UErr` defaults to `UOk`**, which is what makes this a strict superset of the old signature rather than a trade. A default applies exactly when inference finds no candidate (§5.7 note 2, same mechanism) — and for `UErr` that is precisely when type arguments are supplied explicitly. So `match<User, NotFound, string>(…)` still means *one `U`, both branches*, and still holds both to it; `match<User, NotFound, number, string>(…)` is there when they differ. A `cases` object always supplies an `err`, so the default never fires on an inferred call and cannot collapse the union.
+>
+> Verified by `test/core/terminals.spec.ts` and enforced by `pnpm check`. **This applies identically to the wrapper's `.match()` (§6.1, §6.2)** — the method form has the same naked `U` and the same failure.
 
 - **`match` takes both `ok` and `err`**, both required → exhaustive by construction. (v1's `onSuccess`/`onFailure` keys are renamed.)
 - **`unwrapOrThrow` is the only throwing extractor**, and is honestly named. There is deliberately **no bare `unwrap`** (across the genre `unwrap` *throws*; v1's returned `T | undefined`, a silent-undefined footgun) and **no err-side `unwrapErrOrThrow`**.
@@ -446,7 +453,7 @@ export class ResultAsync<T, E> implements PromiseLike<Result<T, E>> {
   inspectErr(fn: (error: E) => void | Promise<void>): ResultAsync<T, E>;
 
   // five value-terminals → Promise-lifted; handlers stay SYNC
-  match<U>(cases: { ok: (value: T) => U; err: (error: E) => U }): Promise<U>;
+  match<UOk, UErr = UOk>(cases: { ok: (value: T) => UOk; err: (error: E) => UErr }): Promise<UOk | UErr>;
   unwrapOr(defaultValue: T): Promise<T>;
   unwrapOrElse(fn: (error: E) => T): Promise<T>;
   unwrapOrThrow(message?: string): Promise<T>;      // rejects on Err
@@ -474,6 +481,8 @@ const displayName = await ok(token)
 ```
 
 **Terminal handlers are synchronous**, exactly as the core's are (§5.3) — only the *return* is lifted. Async work belongs upstream in `.andThen()`. (A deliberate departure from v1, whose `AsyncResultPipeline.match` took `Awaitable<U>` handlers.)
+
+> **`.match()` carries §5.3's amendment** ([#25](https://github.com/alifarooq-zk/result-kit/issues/25), 2026-07-16), and its signature above is corrected in place. Binding `T` and `E` on the class buys the method nothing here: `U` is still a single naked parameter across both callbacks, so `ra.match({ ok: (u) => u.credit, err: () => 'anon' })` fails to compile for the same first-candidate-wins reason. `ResultChain.match()` (§6.1) is the same. The hero example above is *not* affected — both its branches return `string`, which is exactly why this trap survives a happy-path reading. Delegating to the corrected core is not sufficient; the wrapper's own signature must carry the fix.
 
 **No `isOk()` / `isErr()`.** The "lifted" rule stops at the guards, on a principle worth stating because it looks like an inconsistency otherwise: a *value-producing* terminal is useful lifted (it saves the intermediate binding and keeps the chain reading left-to-right); a *non-narrowing boolean guard* is not, because the only thing it would buy — narrowing — needs the plain union anyway. `if (await ra.isOk())` awaits twice and still cannot reach `.value`; `const r = await ra; if (isOk(r))` narrows properly and is shorter. Omitting them also avoids the always-truthy `if (ra.isOk())` footgun.
 

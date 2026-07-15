@@ -83,6 +83,39 @@ describe('match', () => {
       match(okUser(), { onSuccess: (u: User) => u.credit, onFailure: () => -1 });
     });
   });
+
+  /**
+   * `UErr` defaults to `UOk`, so §5.3's own `match<T, E, U>` call shape stays
+   * valid and keeps meaning one `U` across both branches. Without the default
+   * these three are arity errors, which is the whole reason it is there.
+   */
+  it("honours the spec's explicit match<T, E, U> arity", () => {
+    expectTypeOf(
+      match<User, NotFound, string>(okUser(), {
+        ok: (u) => String(u.credit),
+        err: (e) => e.id,
+      }),
+    ).toEqualTypeOf<string>();
+  });
+
+  it('holds both branches to the single U of the explicit arity-3 form', () => {
+    void (() => {
+      match<User, NotFound, string>(okUser(), {
+        // @ts-expect-error — U is pinned to string; the ok branch returns number.
+        ok: (u) => u.credit,
+        err: (e) => e.id,
+      });
+    });
+  });
+
+  it('takes explicit branch types where they genuinely differ', () => {
+    expectTypeOf(
+      match<User, NotFound, number, string>(okUser(), {
+        ok: (u) => u.credit,
+        err: (e) => e.id,
+      }),
+    ).toEqualTypeOf<number | string>();
+  });
 });
 
 describe('unwrapOr', () => {
