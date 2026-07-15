@@ -1,4 +1,10 @@
 export {
+  defineError,
+  isTypedError,
+  type ErrorCtor,
+  type TypedError,
+} from './core/error';
+export {
   err,
   isErr,
   isOk,
