@@ -7,6 +7,7 @@
 - **Map:** [Map: @zireal/result-kit v2 — lean, dependency-free core rework](https://github.com/alifarooq-zk/result-kit/issues/8)
 - **Builds on:** [ADR 0001 — v2 core API paradigm](./0001-v2-core-api-paradigm.md), [ADR 0003 — v2 Result type shape](./0003-v2-result-type-shape.md), [ADR 0004 — v2 full API surface / method inventory](./0004-v2-api-surface-method-inventory.md)
 - **Evidence:** [`docs/research/api-packaging-landscape.md`](../research/api-packaging-landscape.md), [`@praha/byethrow`](https://github.com/praha-inc/byethrow), [`eslint-plugin-neverthrow`](https://github.com/mdbetancourt/eslint-plugin-neverthrow)
+- **Note ([ADR 0009](./0009-v2-resultasync-surface.md), 2026-07-15):** **§2 is scoped to the functional core** — as its heading says — and **never constrained `ResultAsync`'s members.** Its "terminals stay strictly synchronous" ruling answers *"should the core `match(result, cases)` **overload** to accept a `Promise<Result>`?"*, and its stated cost (value-or-promise overload inference) does not arise for an unconditionally-async **method** on the wrapper. ADR 0009 accordingly gives `ResultAsync` five `Promise`-lifted value-terminals. This ADR's decisions **stand unchanged** — §2's core ruling, and §5's three safety properties, are untouched. Not a reversal; a scope clarification, recorded because reading §2 in isolation invites the opposite conclusion.
 
 ## Context
 
