@@ -40,3 +40,31 @@ export interface Err<E> {
  * unwrapped with `.toResult()` before serializing.
  */
 export type Result<T, E> = Ok<T> | Err<E>;
+
+/**
+ * Builds a successful {@link Result}.
+ *
+ * The no-arg overload covers the common `Result<void, E>` success: prefer
+ * `return ok()` over `ok(undefined)`.
+ *
+ * Returns the **narrow** `Ok<T>` rather than `Result<T, never>` — strictly more
+ * precise, and it still assigns into any `Result<T, E>` annotation.
+ */
+export function ok(): Ok<void>;
+export function ok<T>(value: T): Ok<T>;
+export function ok<T>(value?: T): Ok<T | void> {
+  return { ok: true, value: value as T };
+}
+
+/**
+ * Builds a failed {@link Result}.
+ *
+ * The single generic failure constructor — there is no separate typed `fail`.
+ * The `TypedError` convention is expressed by *what you pass*, not by a second
+ * constructor.
+ *
+ * Returns the **narrow** `Err<E>` rather than `Result<never, E>`.
+ */
+export function err<E>(error: E): Err<E> {
+  return { ok: false, error };
+}

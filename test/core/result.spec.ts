@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
+import { err, ok } from '../../src/index';
 import type { Err, Ok, Result } from '../../src/index';
 
 /**
@@ -76,5 +77,75 @@ describe('Result union', () => {
     expect(revived).toEqual({ ok: false, error: { type: 'not_found', message: 'User not found' } });
     if (revived.ok) throw new Error('unreachable');
     expect(revived.error.type).toBe('not_found');
+  });
+});
+
+describe('ok / err constructors', () => {
+  // §5.1: narrow returns. `ok` returns Ok<T>, NOT Result<T, never>.
+  // Narrow is strictly more precise — it still widens into any Result
+  // annotation for free, while keeping .value reachable without narrowing.
+  it('returns the narrow Ok half', () => {
+    const r = ok(1);
+    expectTypeOf(r).toEqualTypeOf<Ok<number>>();
+    expectTypeOf(r.value).toEqualTypeOf<number>();
+    expect(r).toEqual({ ok: true, value: 1 });
+
+    const widened: Result<number, string> = r; // widening is free
+    expect(widened.ok).toBe(true);
+  });
+
+  it('returns the narrow Err half', () => {
+    const e = err('boom');
+    expectTypeOf(e).toEqualTypeOf<Err<string>>();
+    expectTypeOf(e.error).toEqualTypeOf<string>();
+    expect(e).toEqual({ ok: false, error: 'boom' });
+
+    const widened: Result<number, string> = e;
+    expect(widened.ok).toBe(false);
+  });
+
+  // §5.1: the no-arg overload for the common Result<void, E> success.
+  // `return ok()` beats `ok(undefined)`.
+  it('constructs a void Ok with no argument', () => {
+    const r = ok();
+    expectTypeOf(r).toEqualTypeOf<Ok<void>>();
+    expect(r).toEqual({ ok: true, value: undefined });
+  });
+
+  // §2 invariant: exactly two fields per half, at runtime too.
+  it('builds exactly two fields per half', () => {
+    expect(Object.keys(ok(1))).toEqual(['ok', 'value']);
+    expect(Object.keys(err('boom'))).toEqual(['ok', 'error']);
+    expect(Object.keys(ok())).toEqual(['ok', 'value']);
+  });
+
+  // §2 invariant: shallow readonly only — no DeepReadonly, no Object.freeze.
+  // The contained value's mutability is its own business.
+  it('is shallow readonly and never frozen', () => {
+    const r = ok({ n: 1 });
+
+    // @ts-expect-error — the `ok` discriminant is readonly
+    r.ok = false;
+
+    r.value.n = 2; // shallow: the contained value stays mutable
+    expect(r.value.n).toBe(2);
+    expect(Object.isFrozen(r)).toBe(false);
+  });
+
+  // Edge cases: the constructors are generic and must not special-case falsy
+  // or nullish payloads.
+  it('carries falsy and nullish payloads unchanged', () => {
+    expect(ok(0)).toEqual({ ok: true, value: 0 });
+    expect(ok('')).toEqual({ ok: true, value: '' });
+    expect(ok(null)).toEqual({ ok: true, value: null });
+    expect(err(null)).toEqual({ ok: false, error: null });
+    expect(err(undefined)).toEqual({ ok: false, error: undefined });
+  });
+
+  it('carries an Error instance in the error channel', () => {
+    const boom = new Error('kaboom');
+    const e = err(boom);
+    expectTypeOf(e).toEqualTypeOf<Err<Error>>();
+    expect(e.error).toBe(boom);
   });
 });
