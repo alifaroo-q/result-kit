@@ -11,6 +11,13 @@ export {
   type TypedError,
 } from './core/error';
 export {
+  fromNullable,
+  fromPredicate,
+  fromPromise,
+  fromThrowable,
+  fromThrowableAsync,
+} from './core/interop';
+export {
   err,
   isErr,
   isOk,

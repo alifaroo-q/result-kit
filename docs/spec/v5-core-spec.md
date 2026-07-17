@@ -704,7 +704,7 @@ Suggested order — §9.2 was deliberately first after the teardown, because §5
 - [ ] `ok` / `err` / `isOk` / `isErr` (§5.1) with narrow returns and type predicates.
 - [x] `TypedError` + `defineError` + `ErrorCtor` (§3) — **done.** The prototype it was ported from is deleted, as planned; the verdict lives in ADR 0002 §4.
 - [x] `isTypedError` (§5.1) — **done**; `TypedErrorOf` / `TypedErrorUnion` cut.
-- [ ] Transforms (§5.2) — **done ([#24](https://github.com/alifarooq-zk/result-kit/issues/24))**; terminals (§5.3) — **done ([#25](https://github.com/alifarooq-zk/result-kit/issues/25))**; collections (§5.4) — **done ([#26](https://github.com/alifarooq-zk/result-kit/issues/26))**; interop (§5.5), async constructors (§5.6).
+- [x] Transforms (§5.2) — **done ([#24](https://github.com/alifarooq-zk/result-kit/issues/24))**; terminals (§5.3) — **done ([#25](https://github.com/alifarooq-zk/result-kit/issues/25))**; collections (§5.4) — **done ([#26](https://github.com/alifarooq-zk/result-kit/issues/26))**; interop (§5.5) and async constructors (§5.6) — **done ([#27](https://github.com/alifarooq-zk/result-kit/issues/27))**, both in `src/core/interop.ts`.
 - [x] `OkTypeOf` / `ErrTypeOf` (§5.8) — **done ([#26](https://github.com/alifarooq-zk/result-kit/issues/26))**; they live in `src/core/result.ts` beside the `Ok` / `Err` they destructure, not in `collections.ts` — §5.4 tags *why they exist*, not where.
 - [ ] Assert the §2.1 JSON round-trip guarantee in tests.
 
