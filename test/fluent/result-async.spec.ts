@@ -111,6 +111,84 @@ describe('ResultAsync implements PromiseLike', () => {
     expect(settled.constructor).toBe(Object);
     expectTypeOf(settled).toEqualTypeOf<Result<User, NotFound>>();
   });
+
+  /**
+   * `then`'s `TResult1` default, which the assertions above cannot see: they are
+   * pinned by `onfulfilled`'s *parameter* type, so `await` still collapses
+   * correctly even with the default weakened to `unknown`. What regresses is
+   * only the bare `ra.then()` / `ra.then(null, onErr)` shape — it degrades to
+   * `PromiseLike<unknown>` — and `toMatchTypeOf` at the top of this block checks
+   * assignability, which cannot see it either. This is what makes `then` mirror
+   * native `Promise`.
+   */
+  it('bareThen_carriesThePlainUnion', () => {
+    expectTypeOf(asyncOk().then()).toEqualTypeOf<
+      PromiseLike<Result<User, NotFound>>
+    >();
+  });
+});
+
+/**
+ * **A rejecting inner promise propagates — uniformly, and by omission.**
+ *
+ * `ResultAsync.from` takes a `Promise<Result<T, E>>`: a promise that has already
+ * entered the result world and therefore should not reject. If it does, the
+ * caller broke that contract, and the class does the only coherent thing —
+ * propagates, exactly as `await ra.toResult()` would. Nothing is swallowed and
+ * nothing is converted into an `Err`: `E` is the *modelled* error channel, and
+ * silently laundering a contract violation into it would make `E` a lie.
+ *
+ * The sharp edge, stated because it is real: **`unwrapOr(d)` rejects** here,
+ * despite being a total terminal everywhere else in the library. That follows
+ * from the same rule and is pinned below so it stays a decision rather than an
+ * accident. `fromPromise` is the constructor that *does* catch a rejection into
+ * `E` — that is the whole of §10.5's distinction, and the answer for anyone
+ * holding a promise that can reject.
+ *
+ * Spec §6.2 does not state any of this. Recorded in the retro of #26–#29.
+ */
+describe('ResultAsync and a rejecting inner promise', () => {
+  const boom = new Error('contract violation');
+  const rejecting = (): ResultAsync<User, NotFound> =>
+    ResultAsync.from(Promise.reject(boom));
+
+  it('await_propagatesTheRejectionRatherThanSwallowingIt', async () => {
+    await expect(rejecting()).rejects.toThrow(boom);
+  });
+
+  it('await_andToResult_rejectIdenticallySoTheCollapseStaysLossless', async () => {
+    await expect(rejecting()).rejects.toThrow(boom);
+    await expect(rejecting().toResult()).rejects.toThrow(boom);
+  });
+
+  it('match_rejectsRatherThanTakingTheErrBranch', async () => {
+    await expect(
+      rejecting().match({ ok: () => 'ok', err: () => 'err' }),
+    ).rejects.toThrow(boom);
+  });
+
+  it('unwrapOr_rejectsRatherThanReturningTheFallback', async () => {
+    // Total everywhere else in the library; not here. A rejection is a broken
+    // contract, not a modelled `E` — laundering it into the fallback would hide
+    // the bug. Reach for `fromPromise` when the promise can genuinely reject.
+    await expect(rejecting().unwrapOr(user)).rejects.toThrow(boom);
+  });
+
+  it('toNullable_rejectsRatherThanReturningNull', async () => {
+    await expect(rejecting().toNullable()).rejects.toThrow(boom);
+  });
+
+  it('fromPromise_isTheConstructorThatCatchesARejectionInstead', async () => {
+    // The contrast that makes the rule above navigable rather than a trap.
+    // Type argument pinned: `Promise.reject(boom)` is `Promise<never>`, which
+    // would collapse `T` to `never` and make `unwrapOr(user)` a type error for
+    // reasons having nothing to do with what this asserts.
+    await expect(
+      fromPromise<User, NotFound>(Promise.reject(boom), () => notFound).unwrapOr(
+        user,
+      ),
+    ).resolves.toEqual(user);
+  });
 });
 
 describe('ResultAsync chaining members', () => {
@@ -376,10 +454,17 @@ describe('ResultAsync departures from ResultChain', () => {
   it('exposes_noIsOkOrIsErr', () => {
     const ra = asyncOk();
 
+    // The two directives ARE the assertion — an `isOk` on the class makes them
+    // unused, which `pnpm check` reports as an error. Deliberately not written
+    // as `expect(() => ra.isOk()).toThrow()`: that passes only because calling
+    // `undefined` throws a TypeError, which is incidental to the design and
+    // would claim the same coverage against a class that simply forgot the
+    // method. The runtime absence is asserted properly by its neighbour below.
+
     // @ts-expect-error — no isOk on ResultAsync (§6.2); await, then narrow.
-    expect(() => ra.isOk()).toThrow();
+    void ra.isOk;
     // @ts-expect-error — no isErr on ResultAsync (§6.2); await, then narrow.
-    expect(() => ra.isErr()).toThrow();
+    void ra.isErr;
   });
 
   it('exposes_noIsOkOrIsErrAtRuntimeEither', () => {
