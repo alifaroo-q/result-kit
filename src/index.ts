@@ -1,3 +1,8 @@
+export {
+  combine,
+  combineWithAllErrors,
+  partition,
+} from './core/collections';
 export { safeTry, safeUnwrap } from './core/do-notation';
 export {
   defineError,
@@ -11,7 +16,9 @@ export {
   isOk,
   ok,
   type Err,
+  type ErrTypeOf,
   type Ok,
+  type OkTypeOf,
   type Result,
 } from './core/result';
 export {
