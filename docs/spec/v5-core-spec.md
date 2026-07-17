@@ -590,6 +590,23 @@ ADR 0001's headline differentiator — a tree-shakable core neverthrow structura
 
 This guard is the single most important piece of infrastructure in the spec: it is the only thing standing between the design and a silent regression that erases the differentiator the whole rework is built on.
 
+> **Built in [#28](https://github.com/alifarooq-zk/result-kit/issues/28) (2026-07-17) — and the implementation this section suggests is, on its own, insufficient.** Recorded because the gap is in the *guard*, and a guard with a blind spot is the one thing here worse than no guard.
+>
+> "A test importing only from `.`" can only see what the root **exports**. The regression that actually erases the differentiator is *wrapper code that ships without being exported* — a core module referencing `ResultChain` for any reason pulls the class body into the root's chunk graph, where every consumer downloads it while the public surface still looks clean. An import-based test passes that scenario green. **Verified, not theorised:** `test/fluent/boundary.spec.ts` is checked against both leaks, and the behavioural half is blind to the second one exactly as described.
+>
+> So the guard ships with **two independent mechanisms**, and both must hold:
+>
+> 1. **Structural** — the transitive chunk closure of the built root entry must be fed by no source under `src/fluent/`, read from **sourcemaps**. This sees unexported dead weight, and it is immune to prose: `dist/index.js` legitimately mentions `/fluent` in JSDoc today, so a naive text grep would false-positive, and a false-positive guard is one somebody disables.
+> 2. **Behavioural** — importing only from `.`, no export may be or produce a wrapper. This needs no sourcemaps, so it survives mechanism 1 being defeated.
+>
+> Three implementation notes worth keeping, each of which was a way to ship a vacuously-green guard:
+>
+> - **It builds in `beforeAll`.** The guard is a claim about `dist/`, so reading whatever `dist/` happens to be lying around reports green about a stale bundle.
+> - **A missing sourcemap throws** rather than skipping. Turning off `sourcemap` would otherwise silently disable mechanism 1.
+> - **It carries a positive control** — an assertion that the detector *does* find the wrapper in the `/fluent` bundle. Without it, every "the wrapper is absent" test passes identically against a detector that cannot see a wrapper anywhere.
+>
+> The general point, which §10.6's closing note already made from a different direction: **a guard is code, and untested code does not work.** The question "would this fail if the thing it guards regressed?" has an answer, and it is cheap to go get.
+
 ## 8. Migration & release
 
 Source: [ADR 0008](../adr/0008-v2-migration-breaking-change-story.md).
@@ -710,9 +727,9 @@ Suggested order — §9.2 was deliberately first after the teardown, because §5
 
 ### 9.4 `/fluent`
 
-- [ ] `ResultChain<T, E>` (§6.1) — delegating only; **no reimplemented logic**.
+- [x] `ResultChain<T, E>` (§6.1) — **done ([#28](https://github.com/alifarooq-zk/result-kit/issues/28))**; delegating only, **no reimplemented logic**. The async-callback arms of `.map` / `.andThen` (returning `ResultAsync`) land with #29.
 - [ ] `ResultAsync<T, E>` (§6.2, [ADR 0009](../adr/0009-v2-resultasync-surface.md)) — `implements PromiseLike`; five Promise-lifted terminals with **sync** handlers; **no** `isOk`/`isErr`.
-- [ ] `/fluent` `ok` / `err` / `from` / `safeTry` (§6.3).
+- [ ] `/fluent` `ok` / `err` / `from` — **done ([#28](https://github.com/alifarooq-zk/result-kit/issues/28))**; `safeTry` (§6.3) with #30, `fromPromise` / `fromThrowableAsync` with #29.
 - [ ] `[Symbol.iterator]` on `ResultChain`; `[Symbol.asyncIterator]` on `ResultAsync`.
 - [ ] Test: `await` on `ResultAsync` is **lossless** — `await ra` ≡ `await ra.toResult()`.
 - [ ] Test: `ResultAsync.toJSON()` throws with an actionable message (§6.2).
@@ -720,9 +737,9 @@ Suggested order — §9.2 was deliberately first after the teardown, because §5
 
 ### 9.5 Packaging
 
-- [ ] [`tsdown.config.ts`](../../tsdown.config.ts) + `exports` **together** (§7.2): two entries, ESM-only, `target: ES2023`.
+- [x] [`tsdown.config.ts`](../../tsdown.config.ts) + `exports` **together** (§7.2): two entries, ESM-only, `target: ES2023` — **done ([#28](https://github.com/alifarooq-zk/result-kit/issues/28))**.
 - [ ] `package.json` per §7.2; `engines.node >=22.12`; drop `"main"`.
-- [ ] **The §7.3 fluent-boundary guard.** Not optional.
+- [x] **The §7.3 fluent-boundary guard.** Not optional. **Done ([#28](https://github.com/alifarooq-zk/result-kit/issues/28))** — `test/fluent/boundary.spec.ts`, two independent mechanisms, proven red against two distinct leaks. See §7.3's note: the implementation this spec suggested is insufficient alone.
 - [ ] `publint` + `attw` green (pin `attw` to TS 6 if the TS 7 API blocks it — §7.1).
 - [ ] Verify: `pnpm build`, `pnpm test`, `pnpm check`.
 
@@ -816,7 +833,13 @@ The deeper reason: `await` and `Promise.resolve` are **defined** on thenables, n
 - **Rejected — keep both, and document "pass real promises only".** Unenforceable: the offending value type-checks. A rule the compiler cannot state is not a rule.
 - **Not escalated to an ADR.** It reverses no decision and corrects no misreading of one; ADR 0005 §2 fixed the *shape* of these overloads and is untouched. This corrects an unsound runtime check the spec never actually specified. That is an erratum.
 
-**Known debt:** `safeUnwrap` (§5.7, shipped in [#23](https://github.com/alifarooq-zk/result-kit/issues/23)) branches on `instanceof Promise` and has the identical cross-realm hole — `safeUnwrap(foreignPromise)` takes the sync branch and yields a malformed `Err`. Out of #24's scope; raised on [#28](https://github.com/alifarooq-zk/result-kit/issues/28). Note this is **not** about `yield* resultAsync`, which routes through §6.2's own `[Symbol.asyncIterator]` and never reaches `safeUnwrap`.
+~~**Known debt:** `safeUnwrap` (§5.7, shipped in [#23](https://github.com/alifarooq-zk/result-kit/issues/23)) branches on `instanceof Promise` and has the identical cross-realm hole — `safeUnwrap(foreignPromise)` takes the sync branch and yields a malformed `Err`. Out of #24's scope; raised on [#28](https://github.com/alifarooq-zk/result-kit/issues/28).~~ — **Debt discharged by [#28](https://github.com/alifarooq-zk/result-kit/issues/28) (2026-07-17).** `safeUnwrap`'s async overload now takes `PromiseLike<Result<T, E>>` and detects a thenable. Note this was **not** about `yield* resultAsync`, which routes through §6.2's own `[Symbol.asyncIterator]` and never reaches `safeUnwrap`.
+
+> **And the debt was undercounted — `safeTry` had it too.** Found while discharging the above: this note named only `safeUnwrap`, but `safeTry`'s own implementation branched `body().next() instanceof Promise` on the identical rule. `body` is the **caller's** generator, so an `async function*` born in another realm returns a foreign promise from `.next()`; `instanceof` disowned it, `safeTry` took the sync branch, read `.value` off a promise, and **returned `undefined` where its signature promises `Promise<Result<T, E>>`**. Verified against a real cross-realm generator before fixing, and pinned by a regression test that fails against the old check.
+>
+> Both are fixed, and `isThenable` now lives in `src/core/thenable.ts` with exactly one definition — §10.6 makes *the check* the decision, so three copies of it was two too many.
+>
+> The general lesson, which §10.6 already earned once from the other direction: **an erratum's blast radius is a claim, not an observation.** This note asserted a scope ("`safeUnwrap` has the identical hole") that nobody had gone and measured, and it was wrong by one function in a two-function module. When recording that a bug class exists, grep the class.
 
 **This spec no longer contains an open question** — for the third time. Each pass applies pressure the last could not: §10.1–§10.4 came from consolidating eight ADRs, §10.5 from reading the spec as a builder, §10.6 from *being* one. Treat "no open questions" as a claim with a short half-life, not a property.
 

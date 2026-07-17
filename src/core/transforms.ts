@@ -1,36 +1,6 @@
 import { err, ok } from './result';
 import type { Result } from './result';
-
-/**
- * Detects a thenable, not specifically a `Promise` — and the distinction is a
- * correctness fix, not a stylistic one (spec §10.6).
- *
- * `instanceof Promise` asks which *realm* a value was born in. A native promise
- * from a `vm` context, worker, or iframe is a `Promise<Result<T, E>>` as far as
- * TypeScript is concerned — it typechecks, it awaits — and `instanceof Promise`
- * still says `false`. Branch on that and the failure is silent: the value takes
- * the plain-`Result` path, `.ok` reads `undefined`, the err branch is taken, and
- * the transform hands back the raw promise typed as `Result<U, E>`. No throw,
- * just a wrong value with a confident type. `test/core/transforms.spec.ts` pins
- * it with a real cross-realm promise.
- *
- * `await` and `Promise.resolve` are themselves defined on thenables, so this
- * check is what agrees with the language; `instanceof` was the deviation.
- * `ResultAsync` (§6.2) implements `PromiseLike` and rides along for free, but it
- * is a beneficiary — not the reason. This check would be correct with `/fluent`
- * deleted.
- *
- * A `Result` is `{ ok, value }` / `{ ok, error }` and never carries a `then`, so
- * this cannot misfire on the union itself. A *value* inside an `Ok` may well be
- * a thenable, but nothing here inspects `.value`.
- */
-function isThenable(x: unknown): x is PromiseLike<unknown> {
-  return (
-    typeof x === 'object' &&
-    x !== null &&
-    typeof (x as PromiseLike<unknown>).then === 'function'
-  );
-}
+import { isThenable } from './thenable';
 
 /**
  * Every transform below shares one overload pattern, and its **arm order is
