@@ -1,4 +1,5 @@
 import type { Err, Result } from './result';
+import { isThenable } from './thenable';
 
 /**
  * The error types carried by a union of {@link Err}s.
@@ -33,15 +34,24 @@ const RESUMED_AFTER_SHORT_CIRCUIT =
  * The value-or-promise overload is the byethrow model the transforms already
  * use: inside an `async function*`, a `Promise<Result>` unwraps with zero
  * `await` ceremony.
+ *
+ * The async arm takes `PromiseLike`, and detects a thenable rather than asking
+ * `instanceof Promise` — spec §10.6, the same rule the §5.2 transforms follow,
+ * for the same reason and via the same `isThenable`. This shipped in [#23] with
+ * an `instanceof` check and was a **live silent-wrong-value bug**, not a
+ * speculative one: a native cross-realm promise typechecks as
+ * `Promise<Result<T, E>>`, awaits correctly, fails `instanceof`, took the sync
+ * branch, read `.ok` as `undefined` and yielded the raw promise as a malformed
+ * `Err`. Fixed in [#28]; pinned by a cross-realm regression test.
  */
 export function safeUnwrap<T, E>(result: Result<T, E>): Generator<Err<E>, T>;
 export function safeUnwrap<T, E>(
-  result: Promise<Result<T, E>>,
+  result: PromiseLike<Result<T, E>>,
 ): AsyncGenerator<Err<E>, T>;
 export function safeUnwrap<T, E>(
-  result: Result<T, E> | Promise<Result<T, E>>,
+  result: Result<T, E> | PromiseLike<Result<T, E>>,
 ): Generator<Err<E>, T> | AsyncGenerator<Err<E>, T> {
-  if (result instanceof Promise) {
+  if (isThenable(result)) {
     return (async function* () {
       const awaited = await result;
       if (awaited.ok) return awaited.value;
@@ -125,7 +135,18 @@ export function safeTry(
   // result either way and no `done` branch is needed.
   const next = body().next();
 
-  return next instanceof Promise
-    ? next.then((settled) => settled.value)
+  // Thenable-detected for the same §10.6 reason as `safeUnwrap` above, and it is
+  // the same live bug, not a precaution: `body` is the *caller's* generator, so
+  // an `async function*` defined in another realm returns a foreign promise from
+  // `.next()`. Under `instanceof` that took the sync branch and read `.value` off
+  // a promise — `safeTry` returned `undefined` where it promised
+  // `Promise<Result<T, E>>`. Verified against a real cross-realm generator, not
+  // reasoned about. `#28` found this one; §10.6's debt note named only
+  // `safeUnwrap`.
+  //
+  // `Promise.resolve` normalizes: accept any thenable, hand back a native
+  // promise, exactly as the transforms do at their boundary.
+  return isThenable(next)
+    ? Promise.resolve(next).then((settled) => settled.value)
     : next.value;
 }

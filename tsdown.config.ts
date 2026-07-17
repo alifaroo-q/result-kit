@@ -1,7 +1,19 @@
 import { defineConfig } from 'tsdown';
 
 export default defineConfig({
-  entry: { index: 'src/index.ts' },
+  // Spec §7.2: exactly two code entrypoints, `.` and `./fluent`. The keys are
+  // output paths, so `fluent/index` emits `dist/fluent/index.js` — the path
+  // §7.2's `exports` block names. These and `package.json`'s `exports` are
+  // updated **together** (CLAUDE.md's new-entrypoint rule); `exports` is
+  // hand-authored, so nothing does it for you.
+  //
+  // Separate entries are also what makes §7.3's boundary enforceable: two
+  // entries mean two chunks, and the guard can assert the root chunk contains no
+  // wrapper. One entry re-exporting both would erase the differentiator.
+  entry: {
+    index: 'src/index.ts',
+    'fluent/index': 'src/fluent/index.ts',
+  },
   format: ['esm'],
   dts: true,
   sourcemap: true,

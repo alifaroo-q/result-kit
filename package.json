@@ -47,6 +47,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./fluent": {
+      "types": "./dist/fluent/index.d.ts",
+      "default": "./dist/fluent/index.js"
+    },
     "./package.json": "./package.json"
   }
 }

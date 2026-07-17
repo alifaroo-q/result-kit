@@ -1,3 +1,5 @@
+import { runInNewContext } from 'node:vm';
+
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 import { err, ok, safeTry, safeUnwrap } from '../../src/index';
@@ -385,5 +387,107 @@ describe('the known limitation, pinned', () => {
     expectTypeOf(result).toEqualTypeOf<
       Result<number, { type: string; message: string } | { type: string; code: number }>
     >();
+  });
+});
+
+/**
+ * The §10.6 cross-realm hole, mirrored from `test/core/transforms.spec.ts`.
+ *
+ * These are regressions, not hypotheticals — both functions shipped with
+ * `instanceof Promise` and both produced a wrong value with a confident type
+ * and no throw. `safeUnwrap`'s was known debt, raised on #28. `safeTry`'s was
+ * found while fixing it: §10.6's debt note named only `safeUnwrap`.
+ */
+describe('the cross-realm hole (§10.6)', () => {
+  /**
+   * The preconditions that make every test below meaningful: a real, awaitable
+   * promise that `instanceof` nonetheless disowns. If this ever starts failing,
+   * the check it guards was fine all along and these tests are moot.
+   */
+  it('foreignPromise_isAwaitableButFailsInstanceof', async () => {
+    const foreign = runInNewContext(
+      'Promise.resolve({ ok: true, value: 42 })',
+    ) as Promise<Result<number, NotFound>>;
+
+    expect(foreign).not.toBeInstanceOf(Promise);
+    expect(typeof foreign.then).toBe('function');
+    await expect(foreign).resolves.toEqual(ok(42));
+  });
+
+  it('safeUnwrap_foreignPromise_unwrapsTheValueRatherThanYieldingAMalformedErr', async () => {
+    const foreign = runInNewContext(
+      'Promise.resolve({ ok: true, value: 42 })',
+    ) as Promise<Result<number, NotFound>>;
+
+    const result = await safeTry(async function* () {
+      const value = yield* safeUnwrap(foreign);
+      return ok(value * 2);
+    });
+
+    // Under `instanceof`: the sync branch read `.ok` off a promise as
+    // `undefined`, took the err arm, and yielded the raw promise as an `Err`.
+    expect(result).toEqual(ok(84));
+  });
+
+  it('safeUnwrap_foreignPromiseOfErr_shortCircuitsTheBlock', async () => {
+    const foreign = runInNewContext(
+      "Promise.resolve({ ok: false, error: { type: 'not_found', id: 'u1' } })",
+    ) as Promise<Result<number, NotFound>>;
+
+    const result = await safeTry(async function* () {
+      const value = yield* safeUnwrap(foreign);
+      return ok(value * 2);
+    });
+
+    expect(result).toEqual(err({ type: 'not_found', id: 'u1' }));
+  });
+
+  it('safeUnwrap_acceptsAPromiseLikeThatIsNotAPromise', async () => {
+    const thenable: PromiseLike<Result<number, NotFound>> = {
+      then: (onFulfilled) => Promise.resolve(ok(42)).then(onFulfilled),
+    };
+
+    const result = await safeTry(async function* () {
+      const value = yield* safeUnwrap(thenable);
+      return ok(value * 2);
+    });
+
+    expect(result).toEqual(ok(84));
+  });
+
+  /**
+   * `safeTry`'s own `.next()`. `body` is the *caller's* generator, so an
+   * `async function*` born in another realm hands back a foreign promise —
+   * which `instanceof` disowned, sending `safeTry` down the sync branch to read
+   * `.value` off a promise and return `undefined` where its signature promises
+   * `Promise<Result<T, E>>`.
+   */
+  it('safeTry_foreignAsyncGenerator_returnsThePromisedResultRatherThanUndefined', async () => {
+    const foreignBody = runInNewContext(
+      '(async function* () { return { ok: true, value: 42 }; })',
+    ) as () => AsyncGenerator<never, Result<number, NotFound>>;
+
+    const pending = safeTry(foreignBody);
+
+    expect(pending).toBeDefined();
+    await expect(pending).resolves.toEqual(ok(42));
+  });
+
+  it('safeTry_foreignAsyncGenerator_normalizesToANativePromise', async () => {
+    const foreignBody = runInNewContext(
+      '(async function* () { return { ok: true, value: 42 }; })',
+    ) as () => AsyncGenerator<never, Result<number, NotFound>>;
+
+    // `Promise.resolve` at the boundary: accept any thenable, hand back the
+    // concrete thing consumers expect.
+    expect(safeTry(foreignBody)).toBeInstanceOf(Promise);
+  });
+
+  it('safeTry_nativeSyncGenerator_isUnaffectedByTheThenableCheck', () => {
+    const result = safeTry(function* () {
+      return ok(42);
+    });
+
+    expect(result).toEqual(ok(42));
   });
 });
