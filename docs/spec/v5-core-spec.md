@@ -514,6 +514,14 @@ toJSON(): never {
 
 The five terminals are **additive and touch none of these three** — no terminal goes near `then`.
 
+> **A rejecting inner promise propagates — added 2026-07-17, in the retro of [#29](https://github.com/alifarooq-zk/result-kit/issues/29).** This section specified the behaviour nowhere, and the omission is worth closing because one consequence is genuinely surprising.
+>
+> `ResultAsync.from` takes a `Promise<Result<T, E>>` — a promise that has *already* entered the result world and therefore should not reject. If it does, the caller broke that contract, and the class propagates, uniformly across `then` and all five terminals, exactly as `await ra.toResult()` would. Nothing is swallowed, and nothing is converted into an `Err`: `E` is the **modelled** error channel, and laundering a contract violation into it would make `E` a lie — the same reason §5.5's `errorFn` takes `unknown` rather than `Error`.
+>
+> **The sharp edge: `unwrapOr(d)` rejects**, despite being total everywhere else in the library. That follows from the rule rather than contradicting it, but it is exactly the kind of thing a reader assumes the other way. `fromPromise` is the constructor that *does* catch a rejection into `E` — which is §10.5's distinction restated, and the answer for anyone holding a promise that can genuinely reject.
+>
+> Pinned by `test/fluent/result-async.spec.ts`, including the `fromPromise` contrast that makes the rule navigable rather than a trap.
+
 ### 6.3 Complete `/fluent` export list
 
 **Values (7):** `ok` `err` `from` `safeTry` `fromPromise` `fromThrowableAsync` `ResultAsync`
