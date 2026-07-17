@@ -277,12 +277,19 @@ export function combineWithAllErrors<T extends readonly Result<unknown, unknown>
   results: readonly [...T],
 ): Result<{ [K in keyof T]: OkTypeOf<T[K]> }, ErrTypeOf<T[number]>[]>;
 
-export function partition<T, E>(results: Result<T, E>[]): [T[], E[]];
+export function partition<T, E>(results: readonly Result<T, E>[]): [T[], E[]];
 ```
+
+> **Amended (2026-07-17, at implementation): `partition` takes a `readonly` array.** This section wrote it mutable while both combinators above take `readonly` inputs, so a `readonly Result<T, E>[]` that `combine` accepts broke one call later at `partition` — for no stated reason, since nothing in `partition` mutates its input.
+>
+> The `readonly` form is a **strict superset**: every call the mutable signature accepted still resolves (a mutable array is assignable to a `readonly` parameter, not the reverse), and inference of `T` and `E` is untouched. So this is corrected in place rather than annotated as a deviation — the same strict-superset test §5.3's `UErr` default was amended under.
+>
+> Pinned by `test/core/collections.spec.ts`; enforced by `pnpm check`.
 
 - **`combine` is fail-fast** (first error, errors unioned); **`combineWithAllErrors` accumulates every error** as a flat array — the `ZodError.issues[]` analog, and the whole of the accumulation story.
 - **Both preserve tuples** — heterogeneous per-position types, with the homogeneous array as a special case.
-- **`partition` is best-effort** — always returns the successes that worked *plus* the failures. This is the batch capability the all-or-nothing combinators cannot express.
+- **Empty input is `ok([])`** for both combinators — the identity that makes `combine` fold-like, and what keeps `combineWithAllErrors` from erring on *no* errors. `partition([])` is `[[], []]`.
+- **`partition` is best-effort** — always returns the successes that worked *plus* the failures. This is the batch capability the all-or-nothing combinators cannot express. It returns a plain tuple, not a `Result`: it has no failure mode.
 - **No promise overloads.** `await Promise.all([...])` first, then hand the plain `Result[]` to the combinator. Overloading over *arrays of unions vs. arrays of promises-of-unions* is a combinatorial inference mess for a thin gain.
 
 ### 5.5 Interop constructors (3)
@@ -697,8 +704,8 @@ Suggested order — §9.2 was deliberately first after the teardown, because §5
 - [ ] `ok` / `err` / `isOk` / `isErr` (§5.1) with narrow returns and type predicates.
 - [x] `TypedError` + `defineError` + `ErrorCtor` (§3) — **done.** The prototype it was ported from is deleted, as planned; the verdict lives in ADR 0002 §4.
 - [x] `isTypedError` (§5.1) — **done**; `TypedErrorOf` / `TypedErrorUnion` cut.
-- [ ] Transforms (§5.2) — **done ([#24](https://github.com/alifarooq-zk/result-kit/issues/24))**; terminals (§5.3), collections (§5.4), interop (§5.5), async constructors (§5.6).
-- [ ] `OkTypeOf` / `ErrTypeOf` (§5.8).
+- [ ] Transforms (§5.2) — **done ([#24](https://github.com/alifarooq-zk/result-kit/issues/24))**; terminals (§5.3) — **done ([#25](https://github.com/alifarooq-zk/result-kit/issues/25))**; collections (§5.4) — **done ([#26](https://github.com/alifarooq-zk/result-kit/issues/26))**; interop (§5.5), async constructors (§5.6).
+- [x] `OkTypeOf` / `ErrTypeOf` (§5.8) — **done ([#26](https://github.com/alifarooq-zk/result-kit/issues/26))**; they live in `src/core/result.ts` beside the `Ok` / `Err` they destructure, not in `collections.ts` — §5.4 tags *why they exist*, not where.
 - [ ] Assert the §2.1 JSON round-trip guarantee in tests.
 
 ### 9.4 `/fluent`

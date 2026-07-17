@@ -42,6 +42,32 @@ export interface Err<E> {
 export type Result<T, E> = Ok<T> | Err<E>;
 
 /**
+ * Extracts the success type of a {@link Result} — `OkTypeOf<Result<T, E>>` is `T`.
+ *
+ * Public because it already appears in `combine`'s signature (spec §5.4), so it
+ * surfaces in hover and `.d.ts` output whether exported or not, and a symbol a
+ * user can see but cannot import is strictly worse (spec §10.2). Type-only:
+ * zero runtime, zero bundle.
+ *
+ * @remarks
+ * Distribution over the union is what does the work: `Ok<T> | Err<E>` is tried
+ * one member at a time, `Err<E>` fails the `Ok<infer T>` check, and the result
+ * is `T | never` — i.e. `T`.
+ */
+export type OkTypeOf<R extends Result<unknown, unknown>> =
+  R extends Ok<infer T> ? T : never;
+
+/**
+ * Extracts the error type of a {@link Result} — `ErrTypeOf<Result<T, E>>` is `E`.
+ *
+ * The mirror of {@link OkTypeOf}, and public for the same reason (spec §10.2).
+ * Applied to a union of `Result`s it yields the union of their error types,
+ * which is how `combine` accumulates `ErrTypeOf<T[number]>`.
+ */
+export type ErrTypeOf<R extends Result<unknown, unknown>> =
+  R extends Err<infer E> ? E : never;
+
+/**
  * Builds a successful {@link Result}.
  *
  * The no-arg overload covers the common `Result<void, E>` success: prefer
