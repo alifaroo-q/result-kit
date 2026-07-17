@@ -3,6 +3,7 @@ import {
   isOk as coreIsOk,
   type Result,
 } from '../core/result';
+import { isThenable } from '../core/thenable';
 import {
   match as coreMatch,
   toNullable as coreToNullable,
@@ -18,6 +19,30 @@ import {
   mapErr as coreMapErr,
   orElse as coreOrElse,
 } from '../core/transforms';
+
+import { ResultAsync } from './result-async';
+
+/**
+ * Re-wraps whatever a core transform handed back into the matching envelope.
+ *
+ * The core already decided sync-vs-async — it detects a thenable and returns a
+ * `Promise` or a plain `Result` accordingly — so this reads that decision rather
+ * than making a second one. Delegation, still: the branch here mirrors the
+ * core's, it does not duplicate its logic.
+ */
+function wrap<U, F>(
+  out: Result<U, F> | Promise<Result<U, F>>,
+): ResultChain<U, F> | ResultAsync<U, F> {
+  return isThenable(out) ? ResultAsync.from(out) : new ResultChain(out);
+}
+
+/**
+ * What a core transform *actually* returns for a callback that may be either
+ * sync or async — which its own overloads deliberately never say, because they
+ * are written for a caller who knows at the call site. The wrapper does not, so
+ * it re-states the union once, here, instead of casting at six sites.
+ */
+type Settled<U, F> = Result<U, F> | Promise<Result<U, F>>;
 
 /**
  * The sync fluent wrapper (spec §6.1) — **the documented hero** of 5.0.0.
@@ -67,37 +92,101 @@ export class ResultChain<T, E> {
     this.#result = result;
   }
 
-  /** Transforms the value of an `Ok`, passing an `Err` through untouched. */
-  map<U>(fn: (value: T) => U): ResultChain<U, E> {
-    return new ResultChain(coreMap(this.#result, fn));
+  /**
+   * Transforms the value of an `Ok`, passing an `Err` through untouched.
+   *
+   * An **async callback returns a `ResultAsync`** — the seam onto §6.2's
+   * surface, and the reason a chain can start sync and go async mid-flight
+   * without the caller re-entering anything.
+   *
+   * @remarks
+   * **The async arm is declared first on every member below, and the order is
+   * load-bearing** — the same trap §5.2 hit, one rung up. TypeScript takes the
+   * *first* overload that matches, and a sync-first order captures an async
+   * callback in the sync arm with `U = Promise<X>`, handing back
+   * `ResultChain<Promise<X>, E>`: a wrapper around an un-awaited promise, typed
+   * confidently, with the `await` dropped. `inspect` is worse still, because
+   * `() => Promise<void>` satisfies `() => void` under the void-return rule, so
+   * the sync arm accepts it silently. Both typecheck at the definition; only an
+   * assertion on the resolved return type separates them, which is why
+   * `test/fluent/result-chain.spec.ts` pins each arm.
+   */
+  map<U>(fn: (value: T) => PromiseLike<U>): ResultAsync<U, E>;
+  map<U>(fn: (value: T) => U): ResultChain<U, E>;
+  map<U>(
+    fn: (value: T) => U | PromiseLike<U>,
+  ): ResultChain<U, E> | ResultAsync<U, E> {
+    return wrap(
+      coreMap(this.#result, fn as (value: T) => U) as Settled<U, E>,
+    );
   }
 
   /** Transforms the error of an `Err`, passing an `Ok` through untouched. */
-  mapErr<F>(fn: (error: E) => F): ResultChain<T, F> {
-    return new ResultChain(coreMapErr(this.#result, fn));
+  mapErr<F>(fn: (error: E) => PromiseLike<F>): ResultAsync<T, F>;
+  mapErr<F>(fn: (error: E) => F): ResultChain<T, F>;
+  mapErr<F>(
+    fn: (error: E) => F | PromiseLike<F>,
+  ): ResultChain<T, F> | ResultAsync<T, F> {
+    return wrap(
+      coreMapErr(this.#result, fn as (error: E) => F) as Settled<T, F>,
+    );
   }
 
   /**
    * Chains a fallible step onto an `Ok`, accumulating the error channel to
    * `E | F` — the same rule the core `andThen` uses.
    */
-  andThen<U, F>(fn: (value: T) => Result<U, F>): ResultChain<U, E | F> {
-    return new ResultChain(coreAndThen(this.#result, fn));
+  andThen<U, F>(
+    fn: (value: T) => PromiseLike<Result<U, F>>,
+  ): ResultAsync<U, E | F>;
+  andThen<U, F>(fn: (value: T) => Result<U, F>): ResultChain<U, E | F>;
+  andThen<U, F>(
+    fn: (value: T) => Result<U, F> | PromiseLike<Result<U, F>>,
+  ): ResultChain<U, E | F> | ResultAsync<U, E | F> {
+    return wrap(
+      coreAndThen(this.#result, fn as (value: T) => Result<U, F>) as Settled<
+        U,
+        E | F
+      >,
+    );
   }
 
   /** Recovers from an `Err`, accumulating the success channel to `T | U`. */
-  orElse<U, F>(fn: (error: E) => Result<U, F>): ResultChain<T | U, F> {
-    return new ResultChain(coreOrElse(this.#result, fn));
+  orElse<U, F>(
+    fn: (error: E) => PromiseLike<Result<U, F>>,
+  ): ResultAsync<T | U, F>;
+  orElse<U, F>(fn: (error: E) => Result<U, F>): ResultChain<T | U, F>;
+  orElse<U, F>(
+    fn: (error: E) => Result<U, F> | PromiseLike<Result<U, F>>,
+  ): ResultChain<T | U, F> | ResultAsync<T | U, F> {
+    return wrap(
+      coreOrElse(this.#result, fn as (error: E) => Result<U, F>) as Settled<
+        T | U,
+        F
+      >,
+    );
   }
 
   /** Tees the value of an `Ok` for a side effect, returning it unchanged. */
-  inspect(fn: (value: T) => void): ResultChain<T, E> {
-    return new ResultChain(coreInspect(this.#result, fn));
+  inspect(fn: (value: T) => PromiseLike<void>): ResultAsync<T, E>;
+  inspect(fn: (value: T) => void): ResultChain<T, E>;
+  inspect(
+    fn: (value: T) => void | PromiseLike<void>,
+  ): ResultChain<T, E> | ResultAsync<T, E> {
+    return wrap(
+      coreInspect(this.#result, fn as (value: T) => void) as Settled<T, E>,
+    );
   }
 
   /** Tees the error of an `Err` for a side effect, returning it unchanged. */
-  inspectErr(fn: (error: E) => void): ResultChain<T, E> {
-    return new ResultChain(coreInspectErr(this.#result, fn));
+  inspectErr(fn: (error: E) => PromiseLike<void>): ResultAsync<T, E>;
+  inspectErr(fn: (error: E) => void): ResultChain<T, E>;
+  inspectErr(
+    fn: (error: E) => void | PromiseLike<void>,
+  ): ResultChain<T, E> | ResultAsync<T, E> {
+    return wrap(
+      coreInspectErr(this.#result, fn as (error: E) => void) as Settled<T, E>,
+    );
   }
 
   /**
