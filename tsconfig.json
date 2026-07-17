@@ -4,7 +4,8 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "paths": {
-      "@zireal/result-kit": ["./src/index.ts"]
+      "@zireal/result-kit": ["./src/index.ts"],
+      "@zireal/result-kit/fluent": ["./src/fluent/index.ts"]
     },
     "strict": true,
     "declaration": true,

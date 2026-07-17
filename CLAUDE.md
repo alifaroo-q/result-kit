@@ -32,9 +32,9 @@
 
 - [src/index.ts](src/index.ts) is the flat root barrel, and the only public entrypoint today.
 - [src/core/result.ts](src/core/result.ts) holds the `Result` union (`Ok<T> | Err<E>`) plus `ok` / `err` / `isOk` / `isErr`.
-- Later tickets add sibling modules per spec group (`transforms.ts`, `terminals.ts`, `collections.ts`, `interop.ts`, `error.ts`, `do-notation.ts`).
+- [src/core/](src/core/) holds one module per spec group — `transforms.ts` (§5.2), `terminals.ts` (§5.3), `collections.ts` (§5.4), `interop.ts` (§5.5 + §5.6), `error.ts` (§3), `do-notation.ts` (§5.7) — all shipped. The one module that is **not** a spec group is `thenable.ts`: it holds the single `isThenable` definition that §10.6 turns on, shared by `transforms.ts` and `do-notation.ts`. §10.6 makes *the check itself* the decision, so it gets exactly one home; do not inline a second copy.
 - The `./fluent` entrypoint lives in [src/fluent/](src/fluent/) — `ResultChain` landed in [#28](https://github.com/alifarooq-zk/result-kit/issues/28); `ResultAsync` arrives in [#29](https://github.com/alifarooq-zk/result-kit/issues/29). The root `.` bundle must **never** contain the fluent wrapper. That boundary is enforced by [test/fluent/boundary.spec.ts](test/fluent/boundary.spec.ts) (spec §7.3), **not by review** — it builds `dist/` itself and checks two independent things: that no `src/fluent/` source feeds the root's chunk graph (via sourcemaps), and that nothing importable from `.` is or produces a wrapper. If you touch it, re-prove it goes red; it carries a positive control for the same reason.
-- If you add a new public entrypoint, update [tsdown.config.ts](tsdown.config.ts) and the `package.json` `exports` map together.
+- If you add a new public entrypoint, update **three** files together: [tsdown.config.ts](tsdown.config.ts) (build it), the `package.json` `exports` map (publish it), and [tsconfig.json](tsconfig.json)'s `paths` (resolve it in-repo). This rule named only the first two until [#28](https://github.com/alifarooq-zk/result-kit/issues/28) added `./fluent` and missed `paths` **while following it** — the in-repo tests import relatively, so nothing caught that `@zireal/result-kit/fluent` did not resolve. The gap surfaces in [#31](https://github.com/alifarooq-zk/result-kit/issues/31), whose `examples/` compile against the bare specifier.
 - **`exports` is hand-authored, not generated** (`exports: false` in [tsdown.config.ts](tsdown.config.ts)). tsdown's generator collapses `"."` to a bare string, losing spec §7.2's mandated types-first branch, and offers no way to keep `module` without also emitting `main` — which §7.2 forbids, because a `main` invites a tool to `require()` an ESM file as CJS. `publint` and `attw` still validate the hand-written result on every build.
 
 ## Coding Guidance
@@ -43,7 +43,7 @@
 - Keep the union purely structural, per spec §2: no brand, no methods, exactly two fields per half, shallow `readonly` only. These are contracts — each is load-bearing for the §2.1 JSON round-trip guarantee.
 - Keep typed error shapes aligned with the `type` and `message` convention.
 - Preserve the split between the free-function core and the opt-in `/fluent` wrapper: the wrapper delegates to the core, it never reimplements it.
-- Mirror source changes with tests under [test/core](test/core).
+- Mirror source changes with tests: [test/core](test/core) for `src/core`, [test/fluent](test/fluent) for `src/fluent`.
 
 ## Verification
 

@@ -9,6 +9,7 @@ import {
   fromThrowableAsync,
   ok,
 } from '../../src/fluent/index';
+import type { ResultChain } from '../../src/fluent/index';
 
 /**
  * REMINDER: every `expectTypeOf` and `@ts-expect-error` below is enforced by
@@ -214,7 +215,11 @@ describe('the ResultChain → ResultAsync seam', () => {
   it('map_withASyncCallback_staysAResultChain', () => {
     const chain = from(okUser()).map((u) => u.credit);
 
-    expectTypeOf(chain).not.toEqualTypeOf<ResultAsync<number, NotFound>>();
+    // Positively, not as `not.toEqualTypeOf<ResultAsync<…>>()`: a negative rules
+    // out exactly one type, so it would pass against `ResultChain<Promise<
+    // number>, E>` — the very degradation the arm order exists to prevent — and
+    // against `string` for that matter.
+    expectTypeOf(chain).toEqualTypeOf<ResultChain<number, NotFound>>();
   });
 
   /**
@@ -276,6 +281,22 @@ describe('ResultAsync terminals', () => {
 
     expectTypeOf(out).toEqualTypeOf<Promise<number | string>>();
     await expect(out).resolves.toBe(10);
+  });
+
+  /**
+   * **The `UErr = UOk` default, which only an explicit type argument can see.**
+   * Every other `.match()` test here infers, and inference never consults a
+   * default — so deleting `= UOk` left both `pnpm check` and `pnpm test` green.
+   * The core pins the equivalent arity (`terminals.spec.ts`, `match<User,
+   * NotFound, string>`); the wrapper carried §5.3's amendment without carrying
+   * its test. This is what makes the one-type-argument form mean "one U, both
+   * branches".
+   */
+  it('match_honoursTheExplicitSingleTypeArgumentArity', async () => {
+    const out = asyncOk().match<string>({ ok: () => 'a', err: () => 'b' });
+
+    expectTypeOf(out).toEqualTypeOf<Promise<string>>();
+    await expect(out).resolves.toBe('a');
   });
 
   it('unwrapOr_returnsThePromiseLiftedValue', async () => {

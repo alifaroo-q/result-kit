@@ -109,7 +109,9 @@ export class ResultChain<T, E> {
    * `() => Promise<void>` satisfies `() => void` under the void-return rule, so
    * the sync arm accepts it silently. Both typecheck at the definition; only an
    * assertion on the resolved return type separates them, which is why
-   * `test/fluent/result-chain.spec.ts` pins each arm.
+   * `test/fluent/result-async.spec.ts` (the seam suite — that is where both
+   * sides of each arm are visible) pins them, and why swapping either order is
+   * verified to redden `pnpm check`.
    */
   map<U>(fn: (value: T) => PromiseLike<U>): ResultAsync<U, E>;
   map<U>(fn: (value: T) => U): ResultChain<U, E>;
