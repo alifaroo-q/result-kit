@@ -728,11 +728,11 @@ Suggested order — §9.2 was deliberately first after the teardown, because §5
 ### 9.4 `/fluent`
 
 - [x] `ResultChain<T, E>` (§6.1) — **done ([#28](https://github.com/alifarooq-zk/result-kit/issues/28))**; delegating only, **no reimplemented logic**. The async-callback arms of `.map` / `.andThen` (returning `ResultAsync`) land with #29.
-- [ ] `ResultAsync<T, E>` (§6.2, [ADR 0009](../adr/0009-v2-resultasync-surface.md)) — `implements PromiseLike`; five Promise-lifted terminals with **sync** handlers; **no** `isOk`/`isErr`.
-- [ ] `/fluent` `ok` / `err` / `from` — **done ([#28](https://github.com/alifarooq-zk/result-kit/issues/28))**; `safeTry` (§6.3) with #30, `fromPromise` / `fromThrowableAsync` with #29.
+- [x] `ResultAsync<T, E>` (§6.2, [ADR 0009](../adr/0009-v2-resultasync-surface.md)) — **done ([#29](https://github.com/alifarooq-zk/result-kit/issues/29))**: `implements PromiseLike`; five Promise-lifted terminals with **sync** handlers; **no** `isOk`/`isErr`. The `ResultChain`→`ResultAsync` seam (an async callback crossing over) landed with it.
+- [ ] `/fluent` `ok` / `err` / `from` — **done ([#28](https://github.com/alifarooq-zk/result-kit/issues/28))**; `fromPromise` / `fromThrowableAsync` / `ResultAsync` — **done ([#29](https://github.com/alifarooq-zk/result-kit/issues/29))**; `safeTry` (§6.3) with #30. Six of §6.3's seven values ship.
 - [ ] `[Symbol.iterator]` on `ResultChain`; `[Symbol.asyncIterator]` on `ResultAsync`.
-- [ ] Test: `await` on `ResultAsync` is **lossless** — `await ra` ≡ `await ra.toResult()`.
-- [ ] Test: `ResultAsync.toJSON()` throws with an actionable message (§6.2).
+- [x] Test: `await` on `ResultAsync` is **lossless** — `await ra` ≡ `await ra.toResult()` — **done ([#29](https://github.com/alifarooq-zk/result-kit/issues/29))**, both branches.
+- [x] Test: `ResultAsync.toJSON()` throws with an actionable message (§6.2) — **done ([#29](https://github.com/alifarooq-zk/result-kit/issues/29))**; `JSON.stringify(ra)` throws rather than silently emitting `{}`.
 - [ ] Test: `yield* resultAsync` works inside a `/fluent` async `safeTry` (§6.2, §6.3).
 
 ### 9.5 Packaging
