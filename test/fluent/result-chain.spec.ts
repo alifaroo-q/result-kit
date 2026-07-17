@@ -204,6 +204,18 @@ describe('ResultChain terminal members', () => {
     expectTypeOf(out).toEqualTypeOf<number | string>();
   });
 
+  /**
+   * The `UErr = UOk` default — see the twin in `result-async.spec.ts`. Inference
+   * never consults a default, so every inferred `.match()` call above is blind
+   * to it and deleting `= UOk` kept the whole suite green.
+   */
+  it('match_honoursTheExplicitSingleTypeArgumentArity', () => {
+    const out = from(okUser()).match<string>({ ok: () => 'a', err: () => 'b' });
+
+    expectTypeOf(out).toEqualTypeOf<string>();
+    expect(out).toBe('a');
+  });
+
   it('unwrapOr_returnsTheValueOfAnOk', () => {
     expect(ok(10).unwrapOr(0)).toBe(10);
   });
