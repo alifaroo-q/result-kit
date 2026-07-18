@@ -919,7 +919,9 @@ This also explains the four libraries cleanly, and dissolves the apparent disagr
 
 **The rule, which is the section's whole content:**
 
-> A transform whose input is a **settled `Result`** cannot promise an **asynchronous output**, because it may never call the callback at all.
+> A transform whose input is a **settled `Result`** cannot promise an **asynchronous output**.
+
+**The "because" clause this section first attached to that rule named only one of two mechanisms**, and §10.11 corrects it. The runtime decides sync-vs-async by *inspecting values*, and on a settled input **both** inspection sites can lie: the callback may never run (fixed here), and the input may itself be thenable (fixed in §10.11). Only the first was addressed, while the prose asserted soundness for both.
 
 **1. The async-callback arm could not keep its promise (silent, worst of the set).** `map`/`mapErr`/`andThen`/`orElse`/`inspect`/`inspectErr` each had an arm taking a settled `Result` plus an async callback and returning `Promise<Result<…>>`. But the runtime decides sync-vs-async by *inspecting what the callback returned*, and on the short-circuit branch the callback never runs:
 
@@ -930,9 +932,9 @@ map(err('boom'), asyncFn)          // tsc: Promise<Result>   runtime: a plain Re
 
 Awaiting a non-thenable yields the object itself, so the fluent case handed back the **wrapper**: `.ok` read `undefined`, `.error` read `undefined`, and a success was reported as a failure. The core case is milder — `await` masks it — but `.then`/`.catch`/`.finally`, all legal on the published type, throw `TypeError` on the error branch. Data-dependent, so the same call site is correct on one branch and silently wrong on the other. §10.6's signature failure, one rung up.
 
-**No arm ordering fixes this, and no runtime check can.** The information does not exist: `fn.constructor.name === 'AsyncFunction'` catches `async v => …` but not `v => api.get(v)`, and a partial fix makes the residue rarer and correspondingly harder to find. **All twelve arms are removed.** Async work now starts from a promise — `map(Promise.resolve(r), fn)` in the core, and a new **`ResultChain.toAsync()`** on the fluent surface — where the output is a promise on *every* branch. `NoMixedThenable` is renamed **`NoThenableReturn`** and now rejects any thenable-returning callback on a settled input, which is what catches these calls.
+**No arm ordering fixes this, and no runtime check can — for *this* mechanism.** (§10.9 originally wrote the rule as though the callback-never-runs case were the only one. It is not; see §10.11 for the second, which *is* fixable by a runtime check.) The information does not exist: `fn.constructor.name === 'AsyncFunction'` catches `async v => …` but not `v => api.get(v)`, and a partial fix makes the residue rarer and correspondingly harder to find. **All twelve arms are removed.** Async work now starts from a promise — `map(Promise.resolve(r), fn)` in the core, and a new **`ResultChain.toAsync()`** on the fluent surface — where the output is a promise on *every* branch. `NoMixedThenable` is renamed **`NoThenableReturn`** and now rejects any thenable-returning callback on a settled input, which is what catches these calls.
 
-The wrapper got *simpler*: each member collapsed from an overload pair to one signature, and **`wrap()` was deleted**. That helper was the defect — it re-derived a decision it had no evidence for. `Settled<U, F>` is now `Result<U, F>`, true by construction rather than by detection.
+The wrapper got *simpler*: each member collapsed from an overload pair to one signature. **This section also deleted `wrap()`, calling it "the defect" and the result "true by construction rather than by detection". Both claims were wrong, and §10.11 reverses them** — see there. The async-callback *arm* was the defect; `wrap()` was the mitigation for a different hole this section left open.
 
 - **Rejected — type it honestly** as `Result | Promise<Result>` / `ResultChain | ResultAsync`. Truthful and removes no capability, but pushes a union onto every async call site, including the ones correct today.
 - **Rejected — the `AsyncFunction` heuristic.** Knowingly partial; a rarer silent bug survives testing even better than this one did.
@@ -984,7 +986,40 @@ The papercut is the **un-annotated intermediate binding**; the annotated shape a
 - **Rejected — leave the signatures and fix only the note.** The cheapest option, and it was the ticket's own first suggestion. But the default costs nothing, cannot mask (verified), and fixes the papercut rather than documenting it.
 - **Not escalated to an ADR.** ADR 0003's narrow-return decision is upheld; only its recorded cost changes.
 
-**This spec no longer contains an open question** — for the seventh time. Each pass applies pressure the last could not: §10.1–§10.4 came from consolidating eight ADRs, §10.5 from reading the spec as a builder, §10.6 from *being* one, §10.7 from **retroing shipped, green, reviewed code**, §10.8 from **checking that retro's own sources against the primary record**, §10.9 from **four independent lenses over the same seam at once**, and §10.10 from **picking up the finding a retro had itself deferred as low-severity**. Treat "no open questions" as a claim with a short half-life, not a property.
+### 10.11 The guard moves to return position, and the input gets its own check — **decided (2026-07-18, at adversarial review)**
+
+§10.9 and §10.10 were reviewed by three adversarial passes briefed to **refute rather than confirm**. They found four defects in that work, one of them a regression against the code it replaced. This section records the corrections; the findings live in [#38](https://github.com/alifarooq-zk/result-kit/issues/38).
+
+**1. The guard broke every generic wrapper — a regression.** `NoThenableReturn` spread a conditional as a **rest parameter**, which reduces only when `U` is resolved at the call site. Against an unresolved type parameter it never reduces, the guarded arm stops matching, and the call hard-errors:
+
+```ts
+function helper<A, B>(r: Result<A, string>, f: (a: A) => B) {
+  return map(r, f);   // TS2769 — no overload matches
+}
+```
+
+Verified as a regression against the arms that predate the guard, with **no escape**, since `NoThenableReturn` was not exported. §10.9 had already hit this wall internally — it is why `result-chain.ts` carries four `*Unguarded` casts, whose doc comment states the mechanism verbatim — and concluded it affected only internal delegation without checking whether consumers' generic code hit the same wall.
+
+**2. Its `any` carve-out reopened the hole it was closing.** A conditional over `any` takes both branches, so `Extract<any, PromiseLike<unknown>>` is not `never` and the guard fired on every `any`-returning callback — untyped JS callbacks, `vi.fn()` mocks. The `IsAny` carve-out added to fix that then let an `any`-returning callback claim a settled `Result` while the runtime handed back a promise, `.ok` reading `undefined`. **A guard simultaneously too strict and too permissive is the wrong mechanism, not a mistuned one.**
+
+**The check therefore moves to *return* position** (`SettledOr<U, R>`). It defers harmlessly for a generic `U`, resolves once `U` is known, and needs no `any` case — `any` lands in the honest branch and gets the union it deserves. Where `U` holds no thenable it **is** the plain `Result<U, E>`, so synchronous code is untouched. The cost is that a mixed or async callback is now *typed honestly* rather than *rejected*, softening §10.9's decision — and the ergonomic price is far lower than §10.9 assumed, because `await` collapses the union to the settled `Result`, which is what async code writes anyway.
+
+**3. `wrap()`'s deletion was a net regression, and "true by construction" was false.** §10.9 claimed the wrapper could no longer produce a promise. It could, through the input: §2's brandless union means a structurally valid `{ ok: true, value }` may also carry a `then`, and `isThenable` assimilates it. The guard covered the *callback return*; **nothing covered the input**. Reproduced on all six members of both surfaces — `.toResult()` returning a `Promise` typed as a settled `Result`. `wrap()` had been the only thing coping with it, turning that case into a mistyped-but-coherent `ResultAsync`; deleting it produced a promise hidden inside a `ResultChain` instead. It is restored.
+
+Rather than typing around it, the root cause is fixed. **`isSettledResult` asks "is this a `Result`?" before "is this thenable?"** — the two are distinguishable in the direction that matters, since a `Result` has a boolean `ok` and a promise of one does not. §10.6's cross-realm fix is untouched and re-verified: a foreign `Promise<Result>` has no `ok`, still fails the check, and still awaits. `andThen`/`orElse` therefore keep returning a plain `ResultChain`, so chaining does not pay for the edge case.
+
+**4. §10.10's `T` channel was never done.** That section fixed `E` and claimed to cover "wherever a narrow half leaves it no inference site". `err()` returns the narrow `Err<E>`, leaving **`T`** with no inference site — the exact mirror — so `mapErr`, `inspectErr`, `orElse`, `toNullable`, `unwrapOrThrow`, `partition`, and `match` all returned `T = unknown`. Six of seven probes were defective. **The third time this cycle a stated scope was trusted instead of grepped, and the second time inside the same fix.**
+
+Also corrected: §10.10 cleared `combine` for a **false reason** (`E` does surface in its output; it survives because `combine` has no `E` parameter at all, deriving its error channel through `ErrTypeOf<T[number]>`), and §10.7's builder example — which the parameter-position guard had made uncompilable, and which the move to return position restores.
+
+**Three coverage gaps**, each first proven real by a mutation that left the suite green, then closed and re-proven by making that mutation fail: the `await` on the async `safeTry` release (every existing `finally` test used a synchronous body, which runs before the microtask boundary), `Awaited<U>` on the promise-input arms (a purely-async callback resolves via the separate `PromiseLike` arm and never exercises it), and `ErrorCtor.is`'s callable admission (two changes, one pinned).
+
+- **What the review confirmed**, and it is worth recording as covered: all four §10.8 read-count claims (instrumented with `node:vm`), every ecosystem and primary-source claim, §10.10's non-masking under exact-type assertions, the 10/10 identity claims, §2.1's third carve-out, and the §7.3 and constructor-reachability corrections. On tests: **no weakened or lost assertions** across the ~35 rewritten sites, and all 18 `@ts-expect-error` directives mutation-proven load-bearing.
+- **Not escalated to an ADR.** No decision reverses: §10.9's rule stands, corrected in its "because" clause and completed by a second mechanism.
+
+**The lesson this section actually teaches** is not about thenables. §10.6 recorded that *a right answer reached by a wrong argument is a coin landing well*, and §10.9 restated it. Then §10.9 asserted "true by construction" two bullets from the refutation list that disproves it, and §10.10 asserted a scope it had not grepped. **Every erratum in §10 so far was found by the next pass, not by the one that shipped it** — and this one is the first found by a pass whose only job was to disagree. That is not a lucky catch; it is the difference between reviewing and being asked to refute.
+
+**This spec no longer contains an open question** — for the eighth time, and the phrase has now been wrong seven times. Each pass applies pressure the last could not: §10.1–§10.4 came from consolidating eight ADRs, §10.5 from reading the spec as a builder, §10.6 from *being* one, §10.7 from **retroing shipped, green, reviewed code**, §10.8 from **checking that retro's own sources against the primary record**, §10.9 from **four independent lenses over the same seam at once**, §10.10 from **picking up the finding a retro had itself deferred as low-severity**, and §10.11 from **three passes briefed to refute rather than confirm**. Treat "no open questions" as a claim with a short half-life, not a property.
 
 The half-life got shorter, and §10.8 is the sharpest demonstration this document has. **§10.7 was written and green on the same day §10.8 refuted a load-bearing sentence in it** — an ecosystem claim about nine libraries, asserted from a survey nobody had checked against the source. §10.6 earned the rule *"an erratum's blast radius is a claim, not an observation"*; §10.7 restated it and then violated it in its own prose. The corrected version is narrower and more useful: it turned up an option (`then` + `catch`) that the wrong version had defined out of existence. **Cite the source, not the summary — including when the summary is your own and an hour old.**
 
