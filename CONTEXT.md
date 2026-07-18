@@ -5,7 +5,7 @@ A lean, zero-runtime-dependency TypeScript library for the `Result`/`Either` pat
 ## Language
 
 **Result**:
-A plain, method-less discriminated union `Ok<T> | Err<E>` — the serializable source of truth that crosses boundaries. Purely structural (no brand): any `{ ok: true, value }` **is** an **Ok**, any `{ ok: false, error }` **is** an **Err**, whoever built it. Generic over the success type `T` and the error type `E`. Guaranteed to round-trip through `JSON.parse(JSON.stringify(...))` when `T` and `E` are JSON-serializable.
+A plain, method-less discriminated union `Ok<T> | Err<E>` — the serializable source of truth that crosses boundaries. Purely structural (no brand): any `{ ok: true, value }` **is** an **Ok**, any `{ ok: false, error }` **is** an **Err**, whoever built it. Generic over the success type `T` and the error type `E`. Guaranteed to round-trip through `JSON.parse(JSON.stringify(...))` when `T` and `E` are JSON-serializable — consumable with no re-wrapping, subject to spec §2.1's three carve-outs (`cause`, exit the wrapper first, and `Ok<void>`, which round-trips to a one-field object).
 _Avoid_: Either (that's the fp-ts framing we're shedding), Outcome.
 
 **Ok** / **Err**:

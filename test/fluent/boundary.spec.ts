@@ -16,12 +16,23 @@ import { beforeAll, describe, expect, it } from 'vitest';
  * bundle never contains the fluent wrapper. §7.3 says prose is not sufficient,
  * so this fails loudly instead.
  *
- * **This guard reads `dist/`, not `src/`** — it is a claim about what a consumer
- * downloads, which is why `publint` / `attw` cannot make it (they check
- * resolution, not bundle contents). It therefore builds first, in `beforeAll`,
- * rather than trusting whatever `dist/` happens to be lying around: a guard that
- * silently reads a stale bundle is worse than no guard, because it reports
- * green.
+ * **The structural mechanism reads `dist/`, not `src/`** — it is a claim about
+ * what a consumer downloads, which is why `publint` / `attw` cannot make it
+ * (they check resolution, not bundle contents). It therefore builds first, in
+ * `beforeAll`, rather than trusting whatever `dist/` happens to be lying around:
+ * a guard that silently reads a stale bundle is worse than no guard, because it
+ * reports green.
+ *
+ * **The behavioural assertions below import from `src/`, and that is a real
+ * limitation** (§10.9). An earlier version of this note said the guard as a
+ * whole reads `dist/`, which was half true and overstated the coverage: the
+ * behavioural half proves the *source* boundary holds, not the *shipped* one, so
+ * it is blind to a packaging regression — precisely the class of bug `CLAUDE.md`
+ * records for the missed `tsconfig.json` `paths` entry. The structural mechanism
+ * is what covers the build; the two are complementary rather than redundant, and
+ * neither subsumes the other. Running the behavioural assertions against `dist/`
+ * as well would close the gap, and is left as tracked work rather than done
+ * silently here.
  *
  * ### Two independent mechanisms, on purpose
  *
