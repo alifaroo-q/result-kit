@@ -3,8 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-07-14
 - **Deciders:** Ali Farooq
-- **Ticket:** [Decide: the v2 core API paradigm (keystone)](https://github.com/alifarooq-zk/result-kit/issues/10)
-- **Map:** [Map: @zireal/result-kit v2 — lean, dependency-free core rework](https://github.com/alifarooq-zk/result-kit/issues/8)
+- **Ticket:** [Decide: the v2 core API paradigm (keystone)](https://github.com/alifaroo-q/result-kit/issues/10)
+- **Map:** [Map: @zireal/result-kit v2 — lean, dependency-free core rework](https://github.com/alifaroo-q/result-kit/issues/8)
 - **Evidence:** [`docs/research/api-packaging-landscape.md`](../research/api-packaging-landscape.md)
 - **Note ([ADR 0006](./0006-v2-package-layout-entrypoints.md), 2026-07-14):** v2 ships **ESM-only**, which makes the "ESM+CJS `instanceof` dual-package hazard" cited below as *one* justification for the plain-union source of truth **moot**. This ADR's decision **stands unchanged** — the plain-union interchange type rests independently on the JSON round-trip guarantee (ADR 0003) and the byethrow corroboration. Not a reversal.
 
@@ -42,7 +42,7 @@ Adopt a **modular free-function core over a plain, method-less `Result` union, w
 
 - The plain method-less union is the source of truth; the fluent wrapper is a transient ergonomic envelope, never the interchange or serialized type.
 - Two documented surfaces exist; the cost is **documentation discipline**, not duplicated logic. Docs lead with fluent and present the functional core as the byte-conscious path.
-- Downstream tickets are unblocked and now sharp: **Result type shape**, **full API surface / method inventory**, **async strategy**, **package layout & entrypoints**, and the **`?` / do-notation helper**. The **TypedError model** ([#11](https://github.com/alifarooq-zk/result-kit/issues/11)) proceeds in parallel.
+- Downstream tickets are unblocked and now sharp: **Result type shape**, **full API surface / method inventory**, **async strategy**, **package layout & entrypoints**, and the **`?` / do-notation helper**. The **TypedError model** ([#11](https://github.com/alifaroo-q/result-kit/issues/11)) proceeds in parallel.
 - **Tree-shaking risk to guard in packaging:** the hazard is *shared internals*, not the wrapper class per se. The fluent wrapper must live in its own entrypoint and import only the core functions it delegates to, so a functional-only consumer never drags the whole surface (the ramda-vs-es-toolkit lesson).
 
 ## Retro (post-decision web triangulation)

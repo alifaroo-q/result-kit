@@ -3,7 +3,7 @@
 - **Status:** Handoff-ready
 - **Date:** 2026-07-15
 - **Author:** Ali Farooq
-- **Map:** [Map: @zireal/result-kit v2 — lean, dependency-free core rework](https://github.com/alifarooq-zk/result-kit/issues/8) (complete)
+- **Map:** [Map: @zireal/result-kit v2 — lean, dependency-free core rework](https://github.com/alifaroo-q/result-kit/issues/8) (complete)
 - **Decisions:** [ADR 0001](../adr/0001-v2-core-api-paradigm.md) · [0002](../adr/0002-v2-typederror-model.md) · [0003](../adr/0003-v2-result-type-shape.md) · [0004](../adr/0004-v2-api-surface-method-inventory.md) · [0005](../adr/0005-v2-async-strategy.md) · [0006](../adr/0006-v2-package-layout-entrypoints.md) · [0007](../adr/0007-v2-do-notation-helper.md) · [0008](../adr/0008-v2-migration-breaking-change-story.md) · [0009](../adr/0009-v2-resultasync-surface.md)
 - **Evidence:** [`docs/research/api-packaging-landscape.md`](../research/api-packaging-landscape.md)
 - **Vocabulary:** [`CONTEXT.md`](../../CONTEXT.md)
@@ -27,7 +27,7 @@ This spec is the **what to build**. It consolidates those decisions into one imp
 - The NestJS adapter (`src/nest/`) and the `@nestjs/common` peer dependency — **removed, not reworked**.
 - The fp-ts interop (`src/fp-ts/`, `src/internal/fp-ts.ts`) and the `fp-ts` runtime dependency — **removed, not reworked**. No shim ships.
 - New domain capabilities (`Option`/`Maybe`, codecs, transport adapters). This is a lean-down, not a feature expansion.
-- Formatter helpers for accumulated `TypedError[]` — declined for 5.0.0, backlogged as [#18](https://github.com/alifarooq-zk/result-kit/issues/18).
+- Formatter helpers for accumulated `TypedError[]` — declined for 5.0.0, backlogged as [#18](https://github.com/alifaroo-q/result-kit/issues/18).
 - A companion `eslint-plugin-result-kit` must-use rule.
 - Category subpaths (`/collections`, `/interop`, …) — zero bundle gain at this surface size; an additive minor later if the surface grows.
 - A migration codemod.
@@ -74,7 +74,7 @@ A `Result` may therefore be an HTTP response body, a queue message, or a `postMe
 
 ## 3. `TypedError` and `defineError`
 
-Source: [ADR 0002](../adr/0002-v2-typederror-model.md), with the factory signature locked by the [`prototype/define-error/`](../../prototype/define-error/README.md) prototype ([#17](https://github.com/alifarooq-zk/result-kit/issues/17)).
+Source: [ADR 0002](../adr/0002-v2-typederror-model.md), with the factory signature locked by the [`prototype/define-error/`](../../prototype/define-error/README.md) prototype ([#17](https://github.com/alifaroo-q/result-kit/issues/17)).
 
 `E` in `Result<T, E>` stays **fully generic**. `TypedError` is an **opt-in convention**, never mandated by the error channel — `err("not found")` and `err(new DomainError())` stay first-class.
 
@@ -146,7 +146,7 @@ type ApiError = ReturnType<typeof notFound> | ReturnType<typeof forbidden>;
 
 ### 3.4 Formatters (2)
 
-Source: **[ADR 0010](../adr/0010-v2-error-formatter-helpers.md)**, [#18](https://github.com/alifarooq-zk/result-kit/issues/18). Added 2026-07-18, at the maintainer's direction, **before** the release rather than as the post-release additive minor ADR 0004 §4 had deferred them to — so the API freezes with them in and there is no second cut.
+Source: **[ADR 0010](../adr/0010-v2-error-formatter-helpers.md)**, [#18](https://github.com/alifaroo-q/result-kit/issues/18). Added 2026-07-18, at the maintainer's direction, **before** the release rather than as the post-release additive minor ADR 0004 §4 had deferred them to — so the API freezes with them in and there is no second cut.
 
 They live in §3 rather than §5 because they operate on `TypedError[]`, not on a `Result`. They are exported from the root barrel like everything else (§5.9), and are free, pure, standalone functions — a consumer who imports neither ships neither.
 
@@ -289,7 +289,7 @@ export function toNullable<T, E>(result: Result<T, E>): T | null;
 
 **Terminals do not overload over promises.** You `await` before a terminal — natural, since a terminal ends the chain — so unifying them buys nothing and only degrades inference.
 
-> **Amendment from building this ([#25](https://github.com/alifarooq-zk/result-kit/issues/25), 2026-07-16).** `match`'s signature above is **amended, not merely annotated** — the earlier `match<T, E, U>` is the one signature in this spec that contradicted its own prose, and it is corrected in place.
+> **Amendment from building this ([#25](https://github.com/alifaroo-q/result-kit/issues/25), 2026-07-16).** `match`'s signature above is **amended, not merely annotated** — the earlier `match<T, E, U>` is the one signature in this spec that contradicted its own prose, and it is corrected in place.
 >
 > 1. **A slot per branch, `UOk | UErr`.** A single naked `U` across both callbacks cannot deliver the union this section's last bullet requires. TypeScript collects `U`'s inference candidates and takes the **first** rather than unioning them, so `U` locks to the `ok` branch and the `err` branch is rejected: `match(r, { ok: (v) => v.n, err: () => 'fallback' })` fails with *string is not assignable to number*. That is a hard compile error at the call site, not a silent degradation — unlike §5.2's arms, this one cannot ship and be discovered later. The same first-candidate-wins rule §5.7 note 1 hit from the other direction.
 > 2. **`UErr` defaults to `UOk`**, which is what makes this a strict superset of the old signature rather than a trade. A default applies exactly when inference finds no candidate (§5.7 note 2, same mechanism) — and for `UErr` that is precisely when type arguments are supplied explicitly. So `match<User, NotFound, string>(…)` still means *one `U`, both branches*, and still holds both to it; `match<User, NotFound, number, string>(…)` is there when they differ. A `cases` object always supplies an `err`, so the default never fires on an inferred call and cannot collapse the union.
@@ -401,7 +401,7 @@ Five constraints:
 
 Both names are neverthrow's, making the highest-value migration path zero-surprise. `safeUnwrap` is deliberately not bare `unwrap` (§5.3 cut that token).
 
-> **Implementation note — resolved by [#23](https://github.com/alifarooq-zk/result-kit/issues/23) (2026-07-16).** The signatures above are the verdict of a prototype (since deleted); the plumbing they encode is not decoration, and two details are load-bearing in ways no happy-path call site reveals.
+> **Implementation note — resolved by [#23](https://github.com/alifaroo-q/result-kit/issues/23) (2026-07-16).** The signatures above are the verdict of a prototype (since deleted); the plumbing they encode is not decoration, and two details are load-bearing in ways no happy-path call site reveals.
 >
 > 1. **`Y` is a naked type parameter.** Spelling the yield slot `Generator<Err<E>, …>` — the obvious reading of this section's earlier sketch — makes TypeScript decompose the yielded union into one inference candidate per constituent and keep only the **first**, silently collapsing `E₁ | E₂` to `E₁`. A naked `Y` captures the union whole; the distributive `ErrorOf<Y>` unpacks it again.
 > 2. **`T` and `E` default to `never`.** In a body whose only exit is `return ok(v)`, nothing matches the `Err<E>` arm, so `E` draws no inference candidate and falls back to `unknown` — and `unknown | ErrorOf<Y>` swallows the accumulated union. A default applies exactly when inference finds no candidate, so a body that *does* `return err(…)` still infers `E` from it normally.
@@ -523,7 +523,7 @@ const displayName = await ok(token)
 
 **Terminal handlers are synchronous**, exactly as the core's are (§5.3) — only the *return* is lifted. Async work belongs upstream in `.andThen()`. (A deliberate departure from v1, whose `AsyncResultPipeline.match` took `Awaitable<U>` handlers.)
 
-> **`.match()` carries §5.3's amendment** ([#25](https://github.com/alifarooq-zk/result-kit/issues/25), 2026-07-16), and its signature above is corrected in place. Binding `T` and `E` on the class buys the method nothing here: `U` is still a single naked parameter across both callbacks, so `ra.match({ ok: (u) => u.credit, err: () => 'anon' })` fails to compile for the same first-candidate-wins reason. `ResultChain.match()` (§6.1) is the same. The hero example above is *not* affected — both its branches return `string`, which is exactly why this trap survives a happy-path reading. Delegating to the corrected core is not sufficient; the wrapper's own signature must carry the fix.
+> **`.match()` carries §5.3's amendment** ([#25](https://github.com/alifaroo-q/result-kit/issues/25), 2026-07-16), and its signature above is corrected in place. Binding `T` and `E` on the class buys the method nothing here: `U` is still a single naked parameter across both callbacks, so `ra.match({ ok: (u) => u.credit, err: () => 'anon' })` fails to compile for the same first-candidate-wins reason. `ResultChain.match()` (§6.1) is the same. The hero example above is *not* affected — both its branches return `string`, which is exactly why this trap survives a happy-path reading. Delegating to the corrected core is not sufficient; the wrapper's own signature must carry the fix.
 
 **No `isOk()` / `isErr()`.** The "lifted" rule stops at the guards, on a principle worth stating because it looks like an inconsistency otherwise: a *value-producing* terminal is useful lifted (it saves the intermediate binding and keeps the chain reading left-to-right); a *non-narrowing boolean guard* is not, because the only thing it would buy — narrowing — needs the plain union anyway. `if (await ra.isOk())` awaits twice and still cannot reach `.value`; `const r = await ra; if (isOk(r))` narrows properly and is shorter. Omitting them also avoids the always-truthy `if (ra.isOk())` footgun.
 
@@ -548,7 +548,7 @@ toJSON(): never {
 
 The five terminals are **additive and touch none of these three** — no terminal goes near `then`.
 
-> **A rejecting inner promise propagates — added 2026-07-17, in the retro of [#29](https://github.com/alifarooq-zk/result-kit/issues/29).** This section specified the behaviour nowhere, and the omission is worth closing because one consequence is genuinely surprising.
+> **A rejecting inner promise propagates — added 2026-07-17, in the retro of [#29](https://github.com/alifaroo-q/result-kit/issues/29).** This section specified the behaviour nowhere, and the omission is worth closing because one consequence is genuinely surprising.
 >
 > `ResultAsync.from` takes a `Promise<Result<T, E>>` — a promise that has *already* entered the result world and therefore should not reject. If it does, the caller broke that contract, and the class propagates, uniformly across `then` and all five terminals, exactly as `await ra.toResult()` would. Nothing is swallowed, and nothing is converted into an `Err`: `E` is the **modelled** error channel, and laundering a contract violation into it would make `E` a lie — the same reason §5.5's `errorFn` takes `unknown` rather than `Error`.
 >
@@ -602,7 +602,7 @@ Source: [ADR 0006](../adr/0006-v2-package-layout-entrypoints.md).
 - **Exactly three entrypoints:** `.` (flat, self-tree-shakable barrel — all 29 functions + the 7 public types) · `./fluent` · `./package.json`. The v1 `./core`, `./fp-ts`, `./nest` are **all removed**. No `/esm` deep-path hack. No category subpaths.
 - **`engines.node` = `>=22.12`** — raised from v1's `>=20` to align with unflagged `require(esm)`, so *every* supported Node can load the ESM-only package.
 - **Emit target `ES2023`** — all native on the Node floor; no downleveling.
-- **Dev toolchain: TypeScript 7 (`tsgo`)** for the 8–12× typecheck speedup. ~~**Caveat:** TS 7 does not yet expose a stable programmatic API (promised for 7.1), so tools embedding the compiler API — notably **`attw`** — may need to pin the TS 6 line. This does not affect emit.~~ — **Caveat closed by [#21](https://github.com/alifarooq-zk/result-kit/issues/21) (2026-07-16); do not re-investigate.** `typescript@7.0.2` landed with **no TS 6 fallback and no `attw` pin**. `@arethetypeswrong/core` hard-pins its own `typescript@5.6.1-rc` as a *regular dependency* and resolves it nested, so it never loads the project's TypeScript and cannot break on the jump. `.d.ts` generation via `rolldown-plugin-dts` also works (it warns that the 7.0 API is experimental, but emits correctly). The real constraint turned out to be **tsdown's peer range** — `0.21.4` declares `typescript: "^5.0.0"`, which TS 7 violates; `0.22.8` widens it to `"^5.0.0 || ^6.0.0 || ^7.0.0"`. The tsdown upgrade is what enabled the jump. `tsc`'s binary name is unchanged, so `pnpm check` needed no edit — "tsgo" was the name of the *preview* package (`@typescript/native-preview`), superseded by `typescript@7`.
+- **Dev toolchain: TypeScript 7 (`tsgo`)** for the 8–12× typecheck speedup. ~~**Caveat:** TS 7 does not yet expose a stable programmatic API (promised for 7.1), so tools embedding the compiler API — notably **`attw`** — may need to pin the TS 6 line. This does not affect emit.~~ — **Caveat closed by [#21](https://github.com/alifaroo-q/result-kit/issues/21) (2026-07-16); do not re-investigate.** `typescript@7.0.2` landed with **no TS 6 fallback and no `attw` pin**. `@arethetypeswrong/core` hard-pins its own `typescript@5.6.1-rc` as a *regular dependency* and resolves it nested, so it never loads the project's TypeScript and cannot break on the jump. `.d.ts` generation via `rolldown-plugin-dts` also works (it warns that the 7.0 API is experimental, but emits correctly). The real constraint turned out to be **tsdown's peer range** — `0.21.4` declares `typescript: "^5.0.0"`, which TS 7 violates; `0.22.8` widens it to `"^5.0.0 || ^6.0.0 || ^7.0.0"`. The tsdown upgrade is what enabled the jump. `tsc`'s binary name is unchanged, so `pnpm check` needed no edit — "tsgo" was the name of the *preview* package (`@typescript/native-preview`), superseded by `typescript@7`.
 - **Consumer types floor: TypeScript `6.0+`.** TS 6.0 is the *bridge* release: code compiling cleanly on TS 6 compiles **identically** on TS 7, so a `6.0+` floor covers both with one commitment. TS 7 is the *recommended* consumer compiler for speed, not a requirement.
 
 ### 7.2 `package.json`
@@ -630,7 +630,7 @@ Source: [ADR 0006](../adr/0006-v2-package-layout-entrypoints.md).
 - **`publint` + `attw` stay in the build.** They catch exactly the resolution regressions this shape depends on; `attw` should report a clean ESM-only resolution.
 - **Dependencies:** remove the `fp-ts` runtime dependency and the `@nestjs/common` peer dependency + `peerDependenciesMeta`. The package becomes **zero-dependency, zero-peerDependency**.
 - **[`tsdown.config.ts`](../../tsdown.config.ts) and `exports` are updated together** — two entries (`.`, `./fluent`), ESM-only, `target: ES2023`. ([CLAUDE.md](../../CLAUDE.md)'s new-entrypoint rule.)
-- **`exports` is hand-authored, not generated — established by [#21](https://github.com/alifarooq-zk/result-kit/issues/21) (2026-07-16).** [`tsdown.config.ts`](../../tsdown.config.ts) sets `exports: false`, because tsdown's generator **cannot express the block above**: it collapses `"."` to a bare string (losing the mandated types-first branch), and it offers no way to keep `module` without also emitting `main` — verified empirically, `exports.legacy: true` produces `"main": "./dist/index.js"`, the exact hazard this section forbids. `publint` + `attw` still validate the hand-written result on every build. **Consequence for [#28](https://github.com/alifarooq-zk/result-kit/issues/28):** adding `./fluent` means hand-editing `exports` alongside `tsdown.config.ts` — which satisfies the update-together rule, it just is not automated. Do not "fix" this by re-enabling `exports: true`; that silently reverts the types-first branch.
+- **`exports` is hand-authored, not generated — established by [#21](https://github.com/alifaroo-q/result-kit/issues/21) (2026-07-16).** [`tsdown.config.ts`](../../tsdown.config.ts) sets `exports: false`, because tsdown's generator **cannot express the block above**: it collapses `"."` to a bare string (losing the mandated types-first branch), and it offers no way to keep `module` without also emitting `main` — verified empirically, `exports.legacy: true` produces `"main": "./dist/index.js"`, the exact hazard this section forbids. `publint` + `attw` still validate the hand-written result on every build. **Consequence for [#28](https://github.com/alifaroo-q/result-kit/issues/28):** adding `./fluent` means hand-editing `exports` alongside `tsdown.config.ts` — which satisfies the update-together rule, it just is not automated. Do not "fix" this by re-enabling `exports: true`; that silently reverts the types-first branch.
 
 ### 7.3 The fluent-boundary guard (mandatory)
 
@@ -640,7 +640,7 @@ ADR 0001's headline differentiator — a tree-shakable core neverthrow structura
 
 This guard is the single most important piece of infrastructure in the spec: it is the only thing standing between the design and a silent regression that erases the differentiator the whole rework is built on.
 
-> **Built in [#28](https://github.com/alifarooq-zk/result-kit/issues/28) (2026-07-17) — and the implementation this section suggests is, on its own, insufficient.** Recorded because the gap is in the *guard*, and a guard with a blind spot is the one thing here worse than no guard.
+> **Built in [#28](https://github.com/alifaroo-q/result-kit/issues/28) (2026-07-17) — and the implementation this section suggests is, on its own, insufficient.** Recorded because the gap is in the *guard*, and a guard with a blind spot is the one thing here worse than no guard.
 >
 > "A test importing only from `.`" can only see what the root **exports**. The regression that actually erases the differentiator is *wrapper code that ships without being exported* — a core module referencing `ResultChain` for any reason pulls the class body into the root's chunk graph, where every consumer downloads it while the public surface still looks clean. An import-based test passes that scenario green. **Verified, not theorised:** `test/fluent/boundary.spec.ts` is checked against both leaks, and the behavioural half is blind to the second one exactly as described.
 >
@@ -679,7 +679,7 @@ The decisive argument is **semver honesty**, not "next free number". Those versi
 
 `package.json` currently declares the burned `1.2.0`, so a `major` changeset would compute `2.0.0` and `changeset publish` would fail. Therefore:
 
-> **Observed, not predicted (2026-07-18, during [#32](https://github.com/alifarooq-zk/result-kit/issues/32)).** This section said the failure would be a **403**. It is an **E400** — `Cannot publish over previously published version "1.2.0"` — seen on every push to `main` since the rework began, because `changeset publish` reads npm's `versions` list, does not find the burned `1.2.0` there, and concludes it is unpublished. The registry disagrees, since `time` still records it. The verdict is unchanged and the mechanism is exactly as described; only the status code was wrong. Recorded because this document's own §10 rule is to cite the observation rather than the expectation.
+> **Observed, not predicted (2026-07-18, during [#32](https://github.com/alifaroo-q/result-kit/issues/32)).** This section said the failure would be a **403**. It is an **E400** — `Cannot publish over previously published version "1.2.0"` — seen on every push to `main` since the rework began, because `changeset publish` reads npm's `versions` list, does not find the burned `1.2.0` there, and concludes it is unpublished. The registry disagrees, since `time` still records it. The verdict is unchanged and the mechanism is exactly as described; only the status code was wrong. Recorded because this document's own §10 rule is to cite the observation rather than the expectation.
 
 1. Set `package.json` `version` directly: `1.2.0` → **`5.0.0`**.
 2. Hand-write the `## 5.0.0` `CHANGELOG.md` entry (§8.4).
@@ -764,8 +764,8 @@ Suggested order — §9.2 was deliberately first after the teardown, because §5
 
 ### 9.2 Highest-risk first
 
-- [x] **`safeTry` / `safeUnwrap` (§5.7)** — **done ([#23](https://github.com/alifarooq-zk/result-kit/issues/23), 2026-07-16).** Types as specified; no escalation. The yield/next plumbing is resolved in §5.7's implementation note — read it before touching `src/core/do-notation.ts`, because the naive signature compiles and is wrong. One upstream caveat recorded there, which the §3 `TypedError` convention cannot hit.
-- [x] **The §5.2 transform overloads** — **done ([#24](https://github.com/alifarooq-zk/result-kit/issues/24), 2026-07-16).** Acceptance met: `andThen(fetchUser(id), validate)` infers `Promise<Result<User, NotFound | Forbidden>>`. Two amendments came out of it, both in §10.6 and both invisible at runtime: the promise arm takes `PromiseLike`, and §5.2's arm *order* must be inverted in code. Read the note at the top of `src/core/transforms.ts` before touching the overloads — as with §5.7, the naive transcription compiles and is wrong.
+- [x] **`safeTry` / `safeUnwrap` (§5.7)** — **done ([#23](https://github.com/alifaroo-q/result-kit/issues/23), 2026-07-16).** Types as specified; no escalation. The yield/next plumbing is resolved in §5.7's implementation note — read it before touching `src/core/do-notation.ts`, because the naive signature compiles and is wrong. One upstream caveat recorded there, which the §3 `TypedError` convention cannot hit.
+- [x] **The §5.2 transform overloads** — **done ([#24](https://github.com/alifaroo-q/result-kit/issues/24), 2026-07-16).** Acceptance met: `andThen(fetchUser(id), validate)` infers `Promise<Result<User, NotFound | Forbidden>>`. Two amendments came out of it, both in §10.6 and both invisible at runtime: the promise arm takes `PromiseLike`, and §5.2's arm *order* must be inverted in code. Read the note at the top of `src/core/transforms.ts` before touching the overloads — as with §5.7, the naive transcription compiles and is wrong.
 
 ### 9.3 Core (`src/core/` → root barrel)
 
@@ -773,25 +773,25 @@ Suggested order — §9.2 was deliberately first after the teardown, because §5
 - [ ] `ok` / `err` / `isOk` / `isErr` (§5.1) with narrow returns and type predicates.
 - [x] `TypedError` + `defineError` + `ErrorCtor` (§3) — **done.** The prototype it was ported from is deleted, as planned; the verdict lives in ADR 0002 §4.
 - [x] `isTypedError` (§5.1) — **done**; `TypedErrorOf` / `TypedErrorUnion` cut.
-- [x] Transforms (§5.2) — **done ([#24](https://github.com/alifarooq-zk/result-kit/issues/24))**; terminals (§5.3) — **done ([#25](https://github.com/alifarooq-zk/result-kit/issues/25))**; collections (§5.4) — **done ([#26](https://github.com/alifarooq-zk/result-kit/issues/26))**; interop (§5.5) and async constructors (§5.6) — **done ([#27](https://github.com/alifarooq-zk/result-kit/issues/27))**, both in `src/core/interop.ts`.
-- [x] `OkTypeOf` / `ErrTypeOf` (§5.8) — **done ([#26](https://github.com/alifarooq-zk/result-kit/issues/26))**; they live in `src/core/result.ts` beside the `Ok` / `Err` they destructure, not in `collections.ts` — §5.4 tags *why they exist*, not where.
+- [x] Transforms (§5.2) — **done ([#24](https://github.com/alifaroo-q/result-kit/issues/24))**; terminals (§5.3) — **done ([#25](https://github.com/alifaroo-q/result-kit/issues/25))**; collections (§5.4) — **done ([#26](https://github.com/alifaroo-q/result-kit/issues/26))**; interop (§5.5) and async constructors (§5.6) — **done ([#27](https://github.com/alifaroo-q/result-kit/issues/27))**, both in `src/core/interop.ts`.
+- [x] `OkTypeOf` / `ErrTypeOf` (§5.8) — **done ([#26](https://github.com/alifaroo-q/result-kit/issues/26))**; they live in `src/core/result.ts` beside the `Ok` / `Err` they destructure, not in `collections.ts` — §5.4 tags *why they exist*, not where.
 - [ ] Assert the §2.1 JSON round-trip guarantee in tests.
 
 ### 9.4 `/fluent`
 
-- [x] `ResultChain<T, E>` (§6.1) — **done ([#28](https://github.com/alifarooq-zk/result-kit/issues/28))**; delegating only, **no reimplemented logic**. The async-callback arms of `.map` / `.andThen` (returning `ResultAsync`) land with #29.
-- [x] `ResultAsync<T, E>` (§6.2, [ADR 0009](../adr/0009-v2-resultasync-surface.md)) — **done ([#29](https://github.com/alifarooq-zk/result-kit/issues/29))**: `implements PromiseLike`; five Promise-lifted terminals with **sync** handlers; **no** `isOk`/`isErr`. The `ResultChain`→`ResultAsync` seam (an async callback crossing over) landed with it.
-- [ ] `/fluent` `ok` / `err` / `from` — **done ([#28](https://github.com/alifarooq-zk/result-kit/issues/28))**; `fromPromise` / `fromThrowableAsync` / `ResultAsync` — **done ([#29](https://github.com/alifarooq-zk/result-kit/issues/29))**; `safeTry` (§6.3) with #30. Six of §6.3's seven values ship.
+- [x] `ResultChain<T, E>` (§6.1) — **done ([#28](https://github.com/alifaroo-q/result-kit/issues/28))**; delegating only, **no reimplemented logic**. The async-callback arms of `.map` / `.andThen` (returning `ResultAsync`) land with #29.
+- [x] `ResultAsync<T, E>` (§6.2, [ADR 0009](../adr/0009-v2-resultasync-surface.md)) — **done ([#29](https://github.com/alifaroo-q/result-kit/issues/29))**: `implements PromiseLike`; five Promise-lifted terminals with **sync** handlers; **no** `isOk`/`isErr`. The `ResultChain`→`ResultAsync` seam (an async callback crossing over) landed with it.
+- [ ] `/fluent` `ok` / `err` / `from` — **done ([#28](https://github.com/alifaroo-q/result-kit/issues/28))**; `fromPromise` / `fromThrowableAsync` / `ResultAsync` — **done ([#29](https://github.com/alifaroo-q/result-kit/issues/29))**; `safeTry` (§6.3) with #30. Six of §6.3's seven values ship.
 - [ ] `[Symbol.iterator]` on `ResultChain`; `[Symbol.asyncIterator]` on `ResultAsync`.
-- [x] Test: `await` on `ResultAsync` is **lossless** — `await ra` ≡ `await ra.toResult()` — **done ([#29](https://github.com/alifarooq-zk/result-kit/issues/29))**, both branches.
-- [x] Test: `ResultAsync.toJSON()` throws with an actionable message (§6.2) — **done ([#29](https://github.com/alifarooq-zk/result-kit/issues/29))**; `JSON.stringify(ra)` throws rather than silently emitting `{}`.
+- [x] Test: `await` on `ResultAsync` is **lossless** — `await ra` ≡ `await ra.toResult()` — **done ([#29](https://github.com/alifaroo-q/result-kit/issues/29))**, both branches.
+- [x] Test: `ResultAsync.toJSON()` throws with an actionable message (§6.2) — **done ([#29](https://github.com/alifaroo-q/result-kit/issues/29))**; `JSON.stringify(ra)` throws rather than silently emitting `{}`.
 - [ ] Test: `yield* resultAsync` works inside a `/fluent` async `safeTry` (§6.2, §6.3).
 
 ### 9.5 Packaging
 
-- [x] [`tsdown.config.ts`](../../tsdown.config.ts) + `exports` **together** (§7.2): two entries, ESM-only, `target: ES2023` — **done ([#28](https://github.com/alifarooq-zk/result-kit/issues/28))**.
+- [x] [`tsdown.config.ts`](../../tsdown.config.ts) + `exports` **together** (§7.2): two entries, ESM-only, `target: ES2023` — **done ([#28](https://github.com/alifaroo-q/result-kit/issues/28))**.
 - [ ] `package.json` per §7.2; `engines.node >=22.12`; drop `"main"`.
-- [x] **The §7.3 fluent-boundary guard.** Not optional. **Done ([#28](https://github.com/alifarooq-zk/result-kit/issues/28))** — `test/fluent/boundary.spec.ts`, two independent mechanisms, proven red against two distinct leaks. See §7.3's note: the implementation this spec suggested is insufficient alone.
+- [x] **The §7.3 fluent-boundary guard.** Not optional. **Done ([#28](https://github.com/alifaroo-q/result-kit/issues/28))** — `test/fluent/boundary.spec.ts`, two independent mechanisms, proven red against two distinct leaks. See §7.3's note: the implementation this spec suggested is insufficient alone.
 - [ ] `publint` + `attw` green (pin `attw` to TS 6 if the TS 7 API blocks it — §7.1).
 - [ ] Verify: `pnpm build`, `pnpm test`, `pnpm check`.
 
@@ -861,7 +861,7 @@ Found while breaking this spec into execution tickets — the fourth seam consol
 
 ### 10.6 The transforms' promise arm takes `PromiseLike` — **decided (2026-07-16, at build)**
 
-Found while building §5.2 ([#24](https://github.com/alifarooq-zk/result-kit/issues/24)) — the fifth seam, and the first surfaced by neither consolidation nor ticketing but by **writing the code**. §10.5 predicted the pattern; here it is again one rung down.
+Found while building §5.2 ([#24](https://github.com/alifaroo-q/result-kit/issues/24)) — the fifth seam, and the first surfaced by neither consolidation nor ticketing but by **writing the code**. §10.5 predicted the pattern; here it is again one rung down.
 
 §5.2 renders the promise-input arm as `Promise<Result<T, E>>` and implies the obvious runtime check, `instanceof Promise`. **That pair is unsound, and the flaw is in the check, not the type.**
 
@@ -885,7 +885,7 @@ The deeper reason: `await` and `Promise.resolve` are **defined** on thenables, n
 - **Rejected — keep both, and document "pass real promises only".** Unenforceable: the offending value type-checks. A rule the compiler cannot state is not a rule.
 - **Not escalated to an ADR.** It reverses no decision and corrects no misreading of one; ADR 0005 §2 fixed the *shape* of these overloads and is untouched. This corrects an unsound runtime check the spec never actually specified. That is an erratum.
 
-~~**Known debt:** `safeUnwrap` (§5.7, shipped in [#23](https://github.com/alifarooq-zk/result-kit/issues/23)) branches on `instanceof Promise` and has the identical cross-realm hole — `safeUnwrap(foreignPromise)` takes the sync branch and yields a malformed `Err`. Out of #24's scope; raised on [#28](https://github.com/alifarooq-zk/result-kit/issues/28).~~ — **Debt discharged by [#28](https://github.com/alifarooq-zk/result-kit/issues/28) (2026-07-17).** `safeUnwrap`'s async overload now takes `PromiseLike<Result<T, E>>` and detects a thenable. Note this was **not** about `yield* resultAsync`, which routes through §6.2's own `[Symbol.asyncIterator]` and never reaches `safeUnwrap`.
+~~**Known debt:** `safeUnwrap` (§5.7, shipped in [#23](https://github.com/alifaroo-q/result-kit/issues/23)) branches on `instanceof Promise` and has the identical cross-realm hole — `safeUnwrap(foreignPromise)` takes the sync branch and yields a malformed `Err`. Out of #24's scope; raised on [#28](https://github.com/alifaroo-q/result-kit/issues/28).~~ — **Debt discharged by [#28](https://github.com/alifaroo-q/result-kit/issues/28) (2026-07-17).** `safeUnwrap`'s async overload now takes `PromiseLike<Result<T, E>>` and detects a thenable. Note this was **not** about `yield* resultAsync`, which routes through §6.2's own `[Symbol.asyncIterator]` and never reaches `safeUnwrap`.
 
 > **And the debt was undercounted — `safeTry` had it too.** Found while discharging the above: this note named only `safeUnwrap`, but `safeTry`'s own implementation branched `body().next() instanceof Promise` on the identical rule. `body` is the **caller's** generator, so an `async function*` born in another realm returns a foreign promise from `.next()`; `instanceof` disowned it, `safeTry` took the sync branch, read `.value` off a promise, and **returned `undefined` where its signature promises `Promise<Result<T, E>>`**. Verified against a real cross-realm generator before fixing, and pinned by a regression test that fails against the old check.
 >
@@ -895,7 +895,7 @@ The deeper reason: `await` and `Promise.resolve` are **defined** on thenables, n
 
 ### 10.7 The mixed value-or-promise callback is rejected; the non-promise thenable is documented — **decided (2026-07-18, at retro)**
 
-Found in a retro of #26–#29 ([#36](https://github.com/alifarooq-zk/result-kit/issues/36)), both reproduced against `src` and a fresh `dist` before being written down. Neither defect is in that range's new code — both live in §5.2 and in §10.6's check — but they freeze into the API at 5.0.0 and one fix is signature-level, so deferring was breaking.
+Found in a retro of #26–#29 ([#36](https://github.com/alifaroo-q/result-kit/issues/36)), both reproduced against `src` and a fresh `dist` before being written down. Neither defect is in that range's new code — both live in §5.2 and in §10.6's check — but they freeze into the API at 5.0.0 and one fix is signature-level, so deferring was breaking.
 
 **One root cause, not two.** §10.6 widened the runtime check to `typeof x?.then === 'function'`, and **that decision stands.** But the check is strictly *broader* than TypeScript's static notion of awaitable, and §10.6 never reconciled the two. Every value in that gap is typed one way and executed the other.
 
@@ -1007,7 +1007,7 @@ The wrapper got *simpler*: each member collapsed from an overload pair to one si
 
 ### 10.10 `E` defaults to `never` where a narrow half gives it no inference site — **decided (2026-07-18, at retro)**
 
-Filed as [#37](https://github.com/alifarooq-zk/result-kit/issues/37) out of the same retro that produced §10.7, deferred as low-severity, and picked up before the freeze because it traces to a **signature** decision.
+Filed as [#37](https://github.com/alifaroo-q/result-kit/issues/37) out of the same retro that produced §10.7, deferred as low-severity, and picked up before the freeze because it traces to a **signature** decision.
 
 §5.1 returns the narrow `Ok<T>` deliberately. `Ok<T>` has no `Err` member, so it offers `E` **no inference site**, and `E` fell back to `unknown`:
 
@@ -1031,7 +1031,7 @@ The papercut is the **un-annotated intermediate binding**; the annotated shape a
 
 ### 10.11 The guard moves to return position, and the input gets its own check — **decided (2026-07-18, at adversarial review)**
 
-§10.9 and §10.10 were reviewed by three adversarial passes briefed to **refute rather than confirm**. They found four defects in that work, one of them a regression against the code it replaced. This section records the corrections; the findings live in [#38](https://github.com/alifarooq-zk/result-kit/issues/38).
+§10.9 and §10.10 were reviewed by three adversarial passes briefed to **refute rather than confirm**. They found four defects in that work, one of them a regression against the code it replaced. This section records the corrections; the findings live in [#38](https://github.com/alifaroo-q/result-kit/issues/38).
 
 **1. The guard broke every generic wrapper — a regression.** `NoThenableReturn` spread a conditional as a **rest parameter**, which reduces only when `U` is resolved at the call site. Against an unresolved type parameter it never reduces, the guarded arm stops matching, and the call hard-errors:
 
@@ -1064,7 +1064,7 @@ Also corrected: §10.10 cleared `combine` for a **false reason** (`E` does surfa
 
 ### 10.12 The §7.3 behavioural assertions run against `dist/` too — **decided (2026-07-18)**
 
-[#39](https://github.com/alifarooq-zk/result-kit/issues/39), split out of §10.11's residual work. §7.3's guard has two mechanisms and its own note claimed the guard "reads `dist/`, not `src/`". Only the **structural** half did; all five **behavioural** assertions imported `src/`, so they proved the *source* boundary and left the *shipped* one uncovered.
+[#39](https://github.com/alifaroo-q/result-kit/issues/39), split out of §10.11's residual work. §7.3's guard has two mechanisms and its own note claimed the guard "reads `dist/`, not `src/`". Only the **structural** half did; all five **behavioural** assertions imported `src/`, so they proved the *source* boundary and left the *shipped* one uncovered.
 
 Demonstrated before fixing, not argued: with a `ResultChain` export bolted onto `dist/index.js` and `src/` untouched, all five stayed green — and they stayed green against a `dist/` that did not even parse. The behavioural assertions now run against both trees via `describe.each`, and the simulation is re-run in reverse: the leak makes the `dist` pass go red, and a clean build restores it.
 
@@ -1076,7 +1076,7 @@ Demonstrated before fixing, not argued: with a `ResultChain` export bolted onto 
 
 ### 10.13 The `/fluent` do-notation body returns a wrapper — **decided (2026-07-18, at build)**
 
-[#30](https://github.com/alifarooq-zk/result-kit/issues/30), the ticket that makes ADR 0007 §3's *"no `safeUnwrap` needed at `/fluent`"* true rather than aspirational. §6.3's `safeTry` sketch did not survive being implemented, and the reason is one this document has hit before in a different slot: **the signature was written from the root's vantage point and read as though it were the wrapper's.**
+[#30](https://github.com/alifaroo-q/result-kit/issues/30), the ticket that makes ADR 0007 §3's *"no `safeUnwrap` needed at `/fluent`"* true rather than aspirational. §6.3's `safeTry` sketch did not survive being implemented, and the reason is one this document has hit before in a different slot: **the signature was written from the root's vantage point and read as though it were the wrapper's.**
 
 §6.3 spelled the body `gen: () => Generator<..., Result<T, E>>`. That is the correct shape at root. At `/fluent` it rejects the only thing a user on that surface actually writes:
 
@@ -1136,7 +1136,7 @@ The half-life got shorter, and §10.8 is the sharpest demonstration this documen
 |---|---|---|
 | §2 `Result` union | ADR 0003 | — |
 | §2.1 JSON round-trip | ADR 0003 §5 + ADR 0002 §3 | `cause` carve-out |
-| §3 `TypedError` / `defineError` | ADR 0002 + prototype [#17](https://github.com/alifarooq-zk/result-kit/issues/17) | — |
+| §3 `TypedError` / `defineError` | ADR 0002 + prototype [#17](https://github.com/alifaroo-q/result-kit/issues/17) | — |
 | §4 architecture | ADR 0001 | — |
 | §5.1 constructors & guards | ADR 0003 §6, ADR 0002 §5 | `isTypedError` signature → §10.3 |
 | **§5.2 transforms** | **ADR 0004 §1 + ADR 0005 §2** | **merged here; 0005 supersedes 0004**; `PromiseLike` arm + arm order → §10.6 |
@@ -1144,7 +1144,7 @@ The half-life got shorter, and §10.8 is the sharpest demonstration this documen
 | §5.4 collections | ADR 0004 §1, ADR 0005 §2 | sync-only; `OkTypeOf`/`ErrTypeOf` → §10.2 |
 | §5.5 interop | ADR 0004 §1 | — |
 | §5.6 async constructors | ADR 0005 §3 | — |
-| §5.7 do-notation | ADR 0007 + prototype [#23](https://github.com/alifarooq-zk/result-kit/issues/23) | yield typing resolved in §5.7's note; `safeUnwrap` name → ADR 0007 §5 |
+| §5.7 do-notation | ADR 0007 + prototype [#23](https://github.com/alifaroo-q/result-kit/issues/23) | yield typing resolved in §5.7's note; `safeUnwrap` name → ADR 0007 §5 |
 | §5.8 public types | ADR 0004 §1, ADR 0002 §4 | publicness → §10.2 |
 | **§6.1 `ResultChain`** | ADR 0004 §2, ADR 0007 §2 | **name → §10.1** |
 | **§6.2 `ResultAsync`** | ADR 0005 §4–5 + **ADR 0009** | placement/safety from 0005; **member list from 0009** |

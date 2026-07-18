@@ -3,8 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-07-15
 - **Deciders:** Ali Farooq
-- **Ticket:** [Decide: the v2 migration & breaking-change story](https://github.com/alifarooq-zk/result-kit/issues/19)
-- **Map:** [Map: @zireal/result-kit v2 — lean, dependency-free core rework](https://github.com/alifarooq-zk/result-kit/issues/8)
+- **Ticket:** [Decide: the v2 migration & breaking-change story](https://github.com/alifaroo-q/result-kit/issues/19)
+- **Map:** [Map: @zireal/result-kit v2 — lean, dependency-free core rework](https://github.com/alifaroo-q/result-kit/issues/8)
 - **Builds on:** every prior ADR — [0001 paradigm](./0001-v2-core-api-paradigm.md), [0002 TypedError](./0002-v2-typederror-model.md), [0003 Result shape](./0003-v2-result-type-shape.md), [0004 API surface](./0004-v2-api-surface-method-inventory.md), [0005 async](./0005-v2-async-strategy.md), [0006 package layout](./0006-v2-package-layout-entrypoints.md), [0007 do-notation](./0007-v2-do-notation-helper.md)
 - **Evidence:** the npm registry itself (`npm view @zireal/result-kit time/versions/dist-tags`, `api.npmjs.org/downloads/*`), captured in §1 and §4
 
@@ -149,7 +149,7 @@ npm deprecate "@zireal/result-kit@1.x" \
 - **Fake `4.0.0` waypoint + `major` changeset.** Keeps changesets authoritative — but commits a false, burned version to `main`. Rejected (§3).
 - **Changeset for content, hand-edit the version in the Version Packages PR.** Yields a tool-generated changelog *and* the right number — but a manual override inside CI that any careless merge silently reverts to the 403-ing `2.0.0`. Rejected — fragile.
 - **Ship a rename codemod.** Best UX for the mechanical half — but new tooling, tests, docs and maintenance against a zero-dep lean-down, for ~0 users, still unable to touch `pipe` / `fp-ts` / `nest`. Rejected (§4).
-- **Backlog the codemod on demand** (as [#18](https://github.com/alifarooq-zk/result-kit/issues/18) did for formatters). Explicit and reversible — but the download data says the demand will not arrive; a ticket for it is ceremony. Rejected — reconsider if a real consumer ever asks.
+- **Backlog the codemod on demand** (as [#18](https://github.com/alifaroo-q/result-kit/issues/18) did for formatters). Explicit and reversible — but the download data says the demand will not arrive; a ticket for it is ceremony. Rejected — reconsider if a real consumer ever asks.
 - **A typechecked `examples/fp-ts-shim.ts`.** CI would prove the shim correct and it could never rot — but retains `fp-ts` in devDeps forever to guard a feature we deleted. Rejected; then the shim itself was cut (§6).
 - **A full copy-paste fp-ts shim block in the guide.** ~20 lines, zero deps, genuinely unblocks an fp-ts consumer — rejected as still more than a removed, out-of-scope entrypoint with no users earns.
 - **A worked Nest exception-filter recipe.** Gives Nest users a working path — but bakes NestJS architecture opinions into the package this map spent its whole length removing NestJS from. Rejected.

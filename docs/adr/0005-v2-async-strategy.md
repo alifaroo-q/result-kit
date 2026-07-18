@@ -3,8 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-07-14
 - **Deciders:** Ali Farooq
-- **Ticket:** [Decide: the v2 async strategy (split-async)](https://github.com/alifarooq-zk/result-kit/issues/14)
-- **Map:** [Map: @zireal/result-kit v2 — lean, dependency-free core rework](https://github.com/alifarooq-zk/result-kit/issues/8)
+- **Ticket:** [Decide: the v2 async strategy (split-async)](https://github.com/alifaroo-q/result-kit/issues/14)
+- **Map:** [Map: @zireal/result-kit v2 — lean, dependency-free core rework](https://github.com/alifaroo-q/result-kit/issues/8)
 - **Builds on:** [ADR 0001 — v2 core API paradigm](./0001-v2-core-api-paradigm.md), [ADR 0003 — v2 Result type shape](./0003-v2-result-type-shape.md), [ADR 0004 — v2 full API surface / method inventory](./0004-v2-api-surface-method-inventory.md)
 - **Evidence:** [`docs/research/api-packaging-landscape.md`](../research/api-packaging-landscape.md), [`@praha/byethrow`](https://github.com/praha-inc/byethrow), [`eslint-plugin-neverthrow`](https://github.com/mdbetancourt/eslint-plugin-neverthrow)
 - **Note ([ADR 0009](./0009-v2-resultasync-surface.md), 2026-07-15):** **§2 is scoped to the functional core** — as its heading says — and **never constrained `ResultAsync`'s members.** Its "terminals stay strictly synchronous" ruling answers *"should the core `match(result, cases)` **overload** to accept a `Promise<Result>`?"*, and its stated cost (value-or-promise overload inference) does not arise for an unconditionally-async **method** on the wrapper. ADR 0009 accordingly gives `ResultAsync` five `Promise`-lifted value-terminals. This ADR's decisions **stand unchanged** — §2's core ruling, and §5's three safety properties, are untouched. Not a reversal; a scope clarification, recorded because reading §2 in isolation invites the opposite conclusion.
@@ -15,7 +15,7 @@ ADR 0004 locked the complete **synchronous** surface and recorded one async ruli
 
 v1's async surface was a doubled method set plus a separate `AsyncResultPipeline` built on fp-ts `TaskEither` (`src/internal/fp-ts.ts`). Removing fp-ts (a destination constraint) forces a from-scratch async model regardless; the question is its *shape*.
 
-The keystone retro ([#10](https://github.com/alifarooq-zk/result-kit/issues/10) / [ADR 0001](./0001-v2-core-api-paradigm.md)) surfaced the driving footgun: a single unified `ResultAsync` thenable as the **only** async story (neverthrow's model) invites **accidental-`await` collapse**, a floating-thenable lint gap, and sync↔async inference degradation. It handed this ticket a **split-async** fork to confirm or revise.
+The keystone retro ([#10](https://github.com/alifaroo-q/result-kit/issues/10) / [ADR 0001](./0001-v2-core-api-paradigm.md)) surfaced the driving footgun: a single unified `ResultAsync` thenable as the **only** async story (neverthrow's model) invites **accidental-`await` collapse**, a floating-thenable lint gap, and sync↔async inference degradation. It handed this ticket a **split-async** fork to confirm or revise.
 
 ## Decision
 
@@ -98,5 +98,5 @@ Putting async constructors *only* at `/fluent` would force functional-core users
 
 - The v2 async model adds **zero new type names to the functional core** (`Promise<Result>` is stdlib) and exactly **one** to the fluent surface (`ResultAsync`), against v1's ~10 `xAsync` methods + `AsyncResultPipeline`.
 - The transform overloads (§2) are the one place conditional/overloaded return types re-enter the "lean" core; scoped to six functions and validated by byethrow's shipping precedent.
-- This ADR completes the **positive** async model deferred by ADR 0004. Together with package layout ([#15](https://github.com/alifarooq-zk/result-kit/issues/15)) and the `?`/do-notation helper ([#16](https://github.com/alifarooq-zk/result-kit/issues/16)), it feeds the migration & breaking-change story ([#19](https://github.com/alifarooq-zk/result-kit/issues/19)) — the final decision before the v2 spec is handoff-ready.
+- This ADR completes the **positive** async model deferred by ADR 0004. Together with package layout ([#15](https://github.com/alifaroo-q/result-kit/issues/15)) and the `?`/do-notation helper ([#16](https://github.com/alifaroo-q/result-kit/issues/16)), it feeds the migration & breaking-change story ([#19](https://github.com/alifaroo-q/result-kit/issues/19)) — the final decision before the v2 spec is handoff-ready.
 - **Planning only** — implementation (overload authoring, `ResultAsync` class, deleting `src/internal/fp-ts.ts` and `AsyncResultPipeline`) is the separate execution effort.

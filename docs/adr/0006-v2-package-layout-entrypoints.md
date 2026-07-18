@@ -3,8 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-07-14
 - **Deciders:** Ali Farooq
-- **Ticket:** [Decide: the v2 package layout & entrypoints](https://github.com/alifarooq-zk/result-kit/issues/15)
-- **Map:** [Map: @zireal/result-kit v2 — lean, dependency-free core rework](https://github.com/alifarooq-zk/result-kit/issues/8)
+- **Ticket:** [Decide: the v2 package layout & entrypoints](https://github.com/alifaroo-q/result-kit/issues/15)
+- **Map:** [Map: @zireal/result-kit v2 — lean, dependency-free core rework](https://github.com/alifaroo-q/result-kit/issues/8)
 - **Builds on:** [ADR 0001 — v2 core API paradigm](./0001-v2-core-api-paradigm.md), [ADR 0004 — v2 full API surface / method inventory](./0004-v2-api-surface-method-inventory.md)
 - **Evidence:** [`docs/research/api-packaging-landscape.md`](../research/api-packaging-landscape.md), [TypeScript 7.0 announcement](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/)
 
@@ -92,6 +92,6 @@ This is over and above `publint`/`attw` (which check resolution, not bundle cont
 ## Consequences
 
 - **Ripple to ADR 0001.** ESM-only removes the "ESM+CJS `instanceof` dual-package hazard" that ADR 0001 cited as *one* justification for the plain-union source of truth. That justification is now **moot**, but ADR 0001's decision **stands unchanged** — the plain-union interchange type rests independently on serialization (JSON round-trip, ADR 0003) and the byethrow corroboration. No reversal; a forward note is added to ADR 0001.
-- **Feeds the migration story ([#19](https://github.com/alifarooq-zk/result-kit/issues/19)).** v2 now carries **three** breaking axes beyond the API rework for #19 to document: ESM-only (no CJS artifact), Node `>=22.12`, and a TS `6.0+` consumer floor — plus the removed `./core` / `./fp-ts` / `./nest` entrypoints and the dropped `fp-ts` dep / `@nestjs/common` peer.
+- **Feeds the migration story ([#19](https://github.com/alifaroo-q/result-kit/issues/19)).** v2 now carries **three** breaking axes beyond the API rework for #19 to document: ESM-only (no CJS artifact), Node `>=22.12`, and a TS `6.0+` consumer floor — plus the removed `./core` / `./fp-ts` / `./nest` entrypoints and the dropped `fp-ts` dep / `@nestjs/common` peer.
 - **Implementation (execution effort, not now):** update `tsdown.config.ts` (two entries: `.`, `./fluent`; ESM-only; `target: ES2023`) and package `exports` **together** (ADR references [CLAUDE.md](../../CLAUDE.md)'s "new public entrypoint" rule); remove `fp-ts` + `@nestjs/common`; add the §5 boundary guard; keep `publint`/`attw`; add the changeset (a **major**) at that time.
-- **`exports`, `engines`, and the entrypoint set are now fixed** — the remaining design fog for the spec is the `?`/do-notation helper ([#16](https://github.com/alifarooq-zk/result-kit/issues/16)); once that lands, #19 completes the v1→v2 mapping and the spec is handoff-ready.
+- **`exports`, `engines`, and the entrypoint set are now fixed** — the remaining design fog for the spec is the `?`/do-notation helper ([#16](https://github.com/alifaroo-q/result-kit/issues/16)); once that lands, #19 completes the v1→v2 mapping and the spec is handoff-ready.

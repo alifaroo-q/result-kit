@@ -4,11 +4,11 @@
 
 **Goal:** Delete the v1 surface and rebuild the thinnest end-to-end path — `import { ok, err, isOk, isErr } from '@zireal/result-kit'` returning a plain `Ok<T> | Err<E>` union — as an ESM-only package on the toolchain 5.0.0 will actually ship on.
 
-**Architecture:** Teardown and rebuild in one slice, because they are entangled: dropping `fp-ts` and `@nestjs/common` is part of both. What survives is the union (spec §2), its two constructors and two guards (spec §5.1), and nothing else. Only the root `.` entrypoint exists after this ticket; `./fluent` arrives with the wrapper in [#28](https://github.com/alifarooq-zk/result-kit/issues/28), which is when `tsdown.config.ts` and `exports` get updated together per CLAUDE.md's new-entrypoint rule.
+**Architecture:** Teardown and rebuild in one slice, because they are entangled: dropping `fp-ts` and `@nestjs/common` is part of both. What survives is the union (spec §2), its two constructors and two guards (spec §5.1), and nothing else. Only the root `.` entrypoint exists after this ticket; `./fluent` arrives with the wrapper in [#28](https://github.com/alifaroo-q/result-kit/issues/28), which is when `tsdown.config.ts` and `exports` get updated together per CLAUDE.md's new-entrypoint rule.
 
 **Tech Stack:** TypeScript 7.0.2 (fallback 6.0.3) · tsdown 0.22.8 (rolldown) · Vitest 3.2.4 · publint · @arethetypeswrong/core · pnpm 11.9 · Node 24.17 (floor 22.12)
 
-**Ticket:** [#21](https://github.com/alifarooq-zk/result-kit/issues/21) · **Spec:** [`docs/spec/v5-core-spec.md`](../spec/v5-core-spec.md) §2, §2.1, §5.1, §7 · **Decisions:** [ADR 0003](../adr/0003-v2-result-type-shape.md), [ADR 0006](../adr/0006-v2-package-layout-entrypoints.md)
+**Ticket:** [#21](https://github.com/alifaroo-q/result-kit/issues/21) · **Spec:** [`docs/spec/v5-core-spec.md`](../spec/v5-core-spec.md) §2, §2.1, §5.1, §7 · **Decisions:** [ADR 0003](../adr/0003-v2-result-type-shape.md), [ADR 0006](../adr/0006-v2-package-layout-entrypoints.md)
 
 ---
 
@@ -16,12 +16,12 @@
 
 Each of these was inferred or verified during planning, not stated by the ticket. They are decisions, not open questions — but a reviewer should know they were made here.
 
-- **`examples/` is deleted in this ticket, not in [#31](https://github.com/alifarooq-zk/result-kit/issues/31).** `tsconfig.json`'s `include` covers `examples`, and both example files import the v1 API this ticket removes. Leaving them breaks `pnpm check` from Task 1 onward. #31 still owns *authoring* the new `examples/core.ts` — it will need to re-add `examples` to `tsconfig.json`'s `include`. **This is a cross-ticket coupling; #31 has been noted.**
-- **`src/core/error.ts` is deleted here**, taking v1's `TypedError` and `isTypedError` with it. v1's `TypedError` has no `TData` generic, so [#22](https://github.com/alifarooq-zk/result-kit/issues/22) rebuilds it from the prototype rather than editing it. Between this ticket and #22 the package exports no `isTypedError`. That is expected in a rewrite.
-- **`package.json` `version` stays `1.2.0`.** [#32](https://github.com/alifarooq-zk/result-kit/issues/32) hand-sets `5.0.0` at release. Do not touch it here.
+- **`examples/` is deleted in this ticket, not in [#31](https://github.com/alifaroo-q/result-kit/issues/31).** `tsconfig.json`'s `include` covers `examples`, and both example files import the v1 API this ticket removes. Leaving them breaks `pnpm check` from Task 1 onward. #31 still owns *authoring* the new `examples/core.ts` — it will need to re-add `examples` to `tsconfig.json`'s `include`. **This is a cross-ticket coupling; #31 has been noted.**
+- **`src/core/error.ts` is deleted here**, taking v1's `TypedError` and `isTypedError` with it. v1's `TypedError` has no `TData` generic, so [#22](https://github.com/alifaroo-q/result-kit/issues/22) rebuilds it from the prototype rather than editing it. Between this ticket and #22 the package exports no `isTypedError`. That is expected in a rewrite.
+- **`package.json` `version` stays `1.2.0`.** [#32](https://github.com/alifaroo-q/result-kit/issues/32) hand-sets `5.0.0` at release. Do not touch it here.
 - **`attw` profile becomes `esmOnly`** (was `node16`). The package publishes no CJS, so `node16`'s dual-resolution checks no longer describe it.
 - **Vitest stays on 3.2.4** and `vitest.config.ts` is unchanged. See *Type assertions* below.
-- **`prototype/define-error/demo.test.ts` survives this entire ticket** and keeps running. `vitest.config.ts` sets no `include`, so vitest globs `**/*.{test,spec}.*` across the **whole repo** and picks up the prototype's 4 tests — even though `tsconfig.json`'s `include` (`["src", "test", …]`) never covers `prototype/`, which is why `pnpm check` ignores it. Spec §9.3 assigns deleting the prototype to the `defineError` port in [#22](https://github.com/alifarooq-zk/result-kit/issues/22), not here. **Every `pnpm test` count in this plan therefore includes those 4 tests.** Do not "fix" this by narrowing `vitest.config.ts` — the prototype is a real, passing suite until #22 ports it.
+- **`prototype/define-error/demo.test.ts` survives this entire ticket** and keeps running. `vitest.config.ts` sets no `include`, so vitest globs `**/*.{test,spec}.*` across the **whole repo** and picks up the prototype's 4 tests — even though `tsconfig.json`'s `include` (`["src", "test", …]`) never covers `prototype/`, which is why `pnpm check` ignores it. Spec §9.3 assigns deleting the prototype to the `defineError` port in [#22](https://github.com/alifaroo-q/result-kit/issues/22), not here. **Every `pnpm test` count in this plan therefore includes those 4 tests.** Do not "fix" this by narrowing `vitest.config.ts` — the prototype is a real, passing suite until #22 ports it.
 
 ## Type assertions — read this before writing any test
 
@@ -136,7 +136,7 @@ That baseline is **17 v1 tests across 4 spec files** (which Task 1 deletes) **pl
 
 Deletion only — there is nothing to test-drive. The gate is a clean grep and a green typecheck, not a passing suite.
 
-> **After this task `pnpm test` reports `Test Files 1 passed (1) / Tests 4 passed (4)`** — the surviving `prototype/define-error/demo.test.ts`, which [#22](https://github.com/alifarooq-zk/result-kit/issues/22) deletes when it ports the prototype (see *Assumptions*). Every test covering *this package's* code is gone until Task 2. That is expected: all 17 v1 tests exercise deleted code. You will not see "No test files found", and you do not need `--passWithNoTests`.
+> **After this task `pnpm test` reports `Test Files 1 passed (1) / Tests 4 passed (4)`** — the surviving `prototype/define-error/demo.test.ts`, which [#22](https://github.com/alifaroo-q/result-kit/issues/22) deletes when it ports the prototype (see *Assumptions*). Every test covering *this package's* code is gone until Task 2. That is expected: all 17 v1 tests exercise deleted code. You will not see "No test files found", and you do not need `--passWithNoTests`.
 
 **Files:**
 - Delete: `src/nest/http.ts`, `src/nest/index.ts`, `src/fp-ts/index.ts`, `src/internal/fp-ts.ts`, `src/core/pipeline.ts`, `src/core/result-kit.ts`, `src/core/error.ts`, `src/core/index.ts`
@@ -774,7 +774,7 @@ The `tsc` binary name is unchanged, so **`package.json`'s `"check": "tsc --noEmi
 
 `tsconfig.json`: `"target": "ES2022"` → `"target": "ES2023"`.
 
-All of ES2023 is native on the Node 22.12 floor, so there is no downleveling (spec §7.1). This matters more than it looks: **generator and async-iterator emit differs by target**, and [#23](https://github.com/alifarooq-zk/result-kit/issues/23) (`safeTry`) and [#29](https://github.com/alifarooq-zk/result-kit/issues/29) (`ResultAsync`) are built directly on those. Settling the target now is why this ticket exists before them.
+All of ES2023 is native on the Node 22.12 floor, so there is no downleveling (spec §7.1). This matters more than it looks: **generator and async-iterator emit differs by target**, and [#23](https://github.com/alifaroo-q/result-kit/issues/23) (`safeTry`) and [#29](https://github.com/alifaroo-q/result-kit/issues/29) (`ResultAsync`) are built directly on those. Settling the target now is why this ticket exists before them.
 
 - [ ] **Step 5: Verify the full toolchain on TS 7**
 
@@ -805,7 +805,7 @@ pnpm exec tsc --version   # expect: Version 6.0.3
 pnpm exec tsc --noEmit && pnpm exec vitest run && pnpm build
 ```
 
-If the fallback is taken, **comment on [#21](https://github.com/alifarooq-zk/result-kit/issues/21)** with the exact failing command and error, and note that spec §7.1's stated dev toolchain is unmet pending TS 7.1. The consumer-types floor is **6.0+** either way (spec §7.1), so a TS 6 dev toolchain still satisfies the package's actual commitment — TS 7 buys typecheck speed, not correctness. This is a recorded deviation, not a silent one.
+If the fallback is taken, **comment on [#21](https://github.com/alifaroo-q/result-kit/issues/21)** with the exact failing command and error, and note that spec §7.1's stated dev toolchain is unmet pending TS 7.1. The consumer-types floor is **6.0+** either way (spec §7.1), so a TS 6 dev toolchain still satisfies the package's actual commitment — TS 7 buys typecheck speed, not correctness. This is a recorded deviation, not a silent one.
 
 - [ ] **Step 7: Commit**
 
@@ -850,7 +850,7 @@ export default defineConfig({
 
 Changes from v1: the `core`/`fp-ts`/`nest` entries are gone; `format` drops `cjs`; `target` is `es2023`; the `deps.neverBundle` block for `@nestjs/common` is gone; the `attw` profile moves from `node16` to `esmOnly` (the package publishes no CJS, so `node16`'s dual-resolution checks no longer describe it).
 
-The `./fluent` entry is **not** added here — [#28](https://github.com/alifarooq-zk/result-kit/issues/28) adds it together with the `exports` change, per CLAUDE.md's new-entrypoint rule.
+The `./fluent` entry is **not** added here — [#28](https://github.com/alifaroo-q/result-kit/issues/28) adds it together with the `exports` change, per CLAUDE.md's new-entrypoint rule.
 
 - [ ] **Step 2: Set the manifest to the §7.2 shape**
 
@@ -929,7 +929,7 @@ git commit -m '`BUILD`: - ships the package as ESM-only with a single root entry
 
 ### Task 7: Full verification against the ticket
 
-No new code. This is the acceptance gate for [#21](https://github.com/alifarooq-zk/result-kit/issues/21).
+No new code. This is the acceptance gate for [#21](https://github.com/alifaroo-q/result-kit/issues/21).
 
 - [ ] **Step 1: Run the three project commands clean**
 
@@ -938,7 +938,7 @@ pnpm clean && pnpm install && pnpm build && pnpm test && pnpm check
 ```
 Expected: all green. `pnpm check` prints nothing. `pnpm test` reports **22 passed across 2 files** — 18 in `test/core/result.spec.ts` (this ticket's suite) plus 4 in `prototype/define-error/demo.test.ts`.
 
-> **22, not 18.** The prototype suite is globbed by vitest and survives until [#22](https://github.com/alifarooq-zk/result-kit/issues/22) ports it (see *Assumptions*). **18 is the number that matters here** — it is this ticket's entire suite. If `test/core/result.spec.ts` reports anything other than 18, that is drift worth chasing; the trailing 4 are not.
+> **22, not 18.** The prototype suite is globbed by vitest and survives until [#22](https://github.com/alifaroo-q/result-kit/issues/22) ports it (see *Assumptions*). **18 is the number that matters here** — it is this ticket's entire suite. If `test/core/result.spec.ts` reports anything other than 18, that is drift worth chasing; the trailing 4 are not.
 
 - [ ] **Step 2: Confirm the barrel exports exactly the skeleton surface**
 
@@ -956,7 +956,7 @@ Expected: `zero-dep ok`. Spec §7.2 requires the package be zero-dependency **an
 
 - [ ] **Step 4: Walk the ticket's acceptance criteria**
 
-Tick each box on [#21](https://github.com/alifarooq-zk/result-kit/issues/21) against the evidence above. Every criterion maps to a command in this plan:
+Tick each box on [#21](https://github.com/alifaroo-q/result-kit/issues/21) against the evidence above. Every criterion maps to a command in this plan:
 
 | Ticket criterion | Proven by |
 |---|---|
@@ -974,7 +974,7 @@ Tick each box on [#21](https://github.com/alifarooq-zk/result-kit/issues/21) aga
 
 - [ ] **Step 5: Report the toolchain outcome on the ticket**
 
-Comment on [#21](https://github.com/alifarooq-zk/result-kit/issues/21) stating which TypeScript line landed (7.0.2, or 6.0.3 with the failing command and error). Downstream tickets — especially [#23](https://github.com/alifarooq-zk/result-kit/issues/23) and [#29](https://github.com/alifarooq-zk/result-kit/issues/29), which depend on generator and async-iterator emit — need to know which compiler they are building against.
+Comment on [#21](https://github.com/alifaroo-q/result-kit/issues/21) stating which TypeScript line landed (7.0.2, or 6.0.3 with the failing command and error). Downstream tickets — especially [#23](https://github.com/alifaroo-q/result-kit/issues/23) and [#29](https://github.com/alifaroo-q/result-kit/issues/29), which depend on generator and async-iterator emit — need to know which compiler they are building against.
 
 - [ ] **Step 6: Open the PR**
 
@@ -987,6 +987,6 @@ gh pr create --title "Walking skeleton: ESM-only package on the target toolchain
 
 ## Notes for the next ticket
 
-- **[#31](https://github.com/alifarooq-zk/result-kit/issues/31) must re-add `"examples"` to `tsconfig.json`'s `include`** when it authors the new `examples/core.ts`. This ticket removed it along with the v1 example files. See *Assumptions*.
+- **[#31](https://github.com/alifaroo-q/result-kit/issues/31) must re-add `"examples"` to `tsconfig.json`'s `include`** when it authors the new `examples/core.ts`. This ticket removed it along with the v1 example files. See *Assumptions*.
 - **Spec §7.1's `attw`/TS 7 caveat can be closed** — `@arethetypeswrong/core` pins its own `typescript@5.6.1-rc` as a regular dependency and never loads the project's. Worth a note on the spec once #21 lands, so no later ticket re-investigates it.
 - **The `.d.ts` generation path is the only place TS 7 can bite** (`rolldown-plugin-dts`). If Task 5 fell back to TS 6, that is the thing to re-test when TS 7.1 ships its stable programmatic API.
