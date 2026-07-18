@@ -92,29 +92,41 @@ const fetchCredit = async (_id: string): Promise<number> => 10;
 const lookupCredit = (id: string) => creditCache.get(id) ?? fetchCredit(id);
 
 describe('the mixed value-or-promise callback (#36)', () => {
-  it('is rejected by map, rather than typed sync and run async', () => {
-    // @ts-expect-error - a `U | Promise<U>` callback must not match the sync arm
-    map(okUser(), (u) => lookupCredit(String(u.credit)));
+  it('is typed as the branch-dependent union by map, not as a settled Result', () => {
+    expectTypeOf(map(okUser(), (u) => lookupCredit(String(u.credit)))).toEqualTypeOf<
+      Result<number, NotFound> | Promise<Result<number, NotFound>>
+    >();
   });
 
-  it('is rejected by mapErr', () => {
-    // @ts-expect-error - see above
-    mapErr(okUser(), (e) => lookupCredit(e.id));
+  it('is typed as the branch-dependent union by mapErr', () => {
+    expectTypeOf(mapErr(okUser(), (e) => lookupCredit(e.id))).toEqualTypeOf<
+      Result<User, number> | Promise<Result<User, number>>
+    >();
   });
 
-  it('is rejected by inspect, which the void-return rule would otherwise hide', () => {
-    // @ts-expect-error - see above
-    inspect(okUser(), (u) => lookupCredit(String(u.credit)));
+  it('is typed honestly by inspect, which the void-return rule would otherwise hide', () => {
+    expectTypeOf(inspect(okUser(), (u) => lookupCredit(String(u.credit)))).toEqualTypeOf<
+      Result<User, NotFound> | Promise<Result<User, NotFound>>
+    >();
   });
 
-  it('is rejected by inspectErr', () => {
-    // @ts-expect-error - see above
-    inspectErr(okUser(), (e) => lookupCredit(e.id));
+  it('is typed honestly by inspectErr', () => {
+    expectTypeOf(inspectErr(okUser(), (e) => lookupCredit(e.id))).toEqualTypeOf<
+      Result<User, NotFound> | Promise<Result<User, NotFound>>
+    >();
   });
 
-  it('rejects a purely-async callback too, since a settled input cannot go async', () => {
-    // @ts-expect-error - §10.9: the (Result + async callback) arm is gone
-    map(okUser(), async (u) => lookupCredit(String(u.credit)));
+  it('types a purely-async callback the same way, since the Err branch stays settled', () => {
+    expectTypeOf(map(okUser(), async (u) => u.credit)).toEqualTypeOf<
+      Result<number, NotFound> | Promise<Result<number, NotFound>>
+    >();
+  });
+
+  it('collapses under await, which is what async code writes anyway', async () => {
+    const settled = await map(okUser(), async (u) => u.credit);
+
+    expectTypeOf(settled).toEqualTypeOf<Result<number, NotFound>>();
+    expect(settled).toEqual(ok(10));
   });
 
   it('accepts the same async work once the input is a promise', () => {
@@ -137,10 +149,6 @@ describe('map', () => {
       Result<number, NotFound>
     >();
 
-    // §10.9: a settled Result plus an async callback is now a compile error —
-    // the arm could not keep its promise on the short-circuit branch.
-    // @ts-expect-error - use map(Promise.resolve(r), fn) for async work
-    map(okUser(), async (u) => u.credit);
 
     expectTypeOf(map(fetchUser('u1'), (u) => u.credit)).toEqualTypeOf<
       Promise<Result<number, NotFound>>
@@ -178,8 +186,6 @@ describe('mapErr', () => {
     expectTypeOf(mapErr(okUser(), (e) => e.id)).toEqualTypeOf<
       Result<User, string>
     >();
-    // @ts-expect-error - §10.9: a settled input cannot produce an async output
-    mapErr(okUser(), async (e) => e.id);
     expectTypeOf(
       mapErr(Promise.resolve(okUser()), async (e) => e.id),
     ).toEqualTypeOf<Promise<Result<User, string>>>();
@@ -221,8 +227,6 @@ describe('andThen', () => {
     expectTypeOf(andThen(fetchUser('u1'), validate)).toEqualTypeOf<
       Promise<Result<User, NotFound | Forbidden>>
     >();
-    // @ts-expect-error - §10.9: a settled input cannot produce an async output
-    andThen(okUser(), validateAsync);
     expectTypeOf(
       andThen(Promise.resolve(okUser()), validateAsync),
     ).toEqualTypeOf<Promise<Result<User, NotFound | Forbidden>>>();
@@ -260,8 +264,6 @@ describe('orElse', () => {
     expectTypeOf(orElse(okUser(), recover)).toEqualTypeOf<
       Result<User | Order, Forbidden>
     >();
-    // @ts-expect-error - §10.9: a settled input cannot produce an async output
-    orElse(okUser(), recoverAsync);
     expectTypeOf(
       orElse(Promise.resolve(okUser()), recoverAsync),
     ).toEqualTypeOf<Promise<Result<User | Order, Forbidden>>>();
@@ -288,8 +290,6 @@ describe('inspect', () => {
     expectTypeOf(inspect(okUser(), () => {})).toEqualTypeOf<
       Result<User, NotFound>
     >();
-    // @ts-expect-error - §10.9: a settled input cannot produce an async output
-    inspect(okUser(), async () => {});
     expectTypeOf(
       inspect(Promise.resolve(okUser()), async () => {}),
     ).toEqualTypeOf<Promise<Result<User, NotFound>>>();
@@ -325,8 +325,6 @@ describe('inspectErr', () => {
     expectTypeOf(inspectErr(okUser(), () => {})).toEqualTypeOf<
       Result<User, NotFound>
     >();
-    // @ts-expect-error - §10.9: a settled input cannot produce an async output
-    inspectErr(okUser(), async () => {});
     expectTypeOf(
       inspectErr(Promise.resolve(okUser()), async () => {}),
     ).toEqualTypeOf<Promise<Result<User, NotFound>>>();
@@ -431,11 +429,18 @@ describe('the renamed and absent surface', () => {
   });
 
   it('rejects a non-Result first argument', () => {
-    // @ts-expect-error — data-first, and the first argument is the Result.
-    map({ credit: 10 }, (u: User) => u.credit);
+    // Type-level only — these are never invoked. Both calls are ill-typed, so
+    // their runtime behaviour is undefined and asserting on it would pin an
+    // accident: before §10.11 the curried form happened to hand back the
+    // callback itself, and now it hands back a promise. `@ts-expect-error`
+    // bites under `tsc` whether or not the body runs.
+    void (() => {
+      // @ts-expect-error — data-first, and the first argument is the Result.
+      map({ credit: 10 }, (u: User) => u.credit);
 
-    // @ts-expect-error — no data-last / curried variant exists.
-    map((u: User) => u.credit)(okUser());
+      // @ts-expect-error — no data-last / curried variant exists.
+      map((u: User) => u.credit)(okUser());
+    });
   });
 });
 
@@ -549,5 +554,54 @@ describe('a transform over a bare constructor (#37)', () => {
 
     const annotated: Result<number, NotFound> = out;
     expect(annotated).toEqual(ok(1));
+  });
+});
+
+/**
+ * §10.11. The `NoThenableReturn` rest parameter was a conditional in a
+ * *parameter* position, and a conditional over an unresolved type parameter
+ * never reduces — so the guarded arm stopped matching and every generic wrapper
+ * over `Result` failed to compile. Verified as a regression against the arms
+ * that predate it. The guard also needed an `IsAny` carve-out, which reopened
+ * the §10.9 hole it was meant to close.
+ *
+ * The check moved to the *return* type, which defers harmlessly for a generic
+ * `U` and resolves once `U` is known.
+ */
+describe('generic code can still call the transforms (#38 retro)', () => {
+  it('accepts a callback whose return type is an unresolved type parameter', () => {
+    function helper<A, B>(r: Result<A, string>, f: (a: A) => B) {
+      return map(r, f);
+    }
+    function identity<X>(r: Result<X, string>) {
+      return map(r, (v) => v);
+    }
+    function teeing<A>(r: Result<A, string>, f: (a: A) => void) {
+      return inspect(r, f);
+    }
+    function erring<A, F>(r: Result<A, string>, f: (e: string) => F) {
+      return mapErr(r, f);
+    }
+
+    expect(helper(ok(1), (n) => n + 1)).toEqual(ok(2));
+    expect(identity(ok(1))).toEqual(ok(1));
+    expect(teeing(ok(1), () => {})).toEqual(ok(1));
+    expect(erring(ok(1), (e) => e)).toEqual(ok(1));
+  });
+
+  it('does not let an any-returning callback claim a settled Result', () => {
+    // The carve-out's hole: `any` asserts nothing, so the honest answer is the
+    // data-dependent union, not a confident `Result`.
+    const asyncFn = ((v: number) => Promise.resolve(v + 1)) as (v: number) => any;
+
+    expectTypeOf(map(ok(1), asyncFn)).toEqualTypeOf<
+      Result<any, never> | Promise<Result<any, never>>
+    >();
+  });
+
+  it('still types a plain sync callback as a settled Result', () => {
+    expectTypeOf(map(ok(1), (v) => `n${v}`)).toEqualTypeOf<
+      Result<string, never>
+    >();
   });
 });

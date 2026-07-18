@@ -293,9 +293,10 @@ describe('ResultAsync chaining members', () => {
  * the wrapper itself and a success read as a failure.
  */
 describe('the ResultChain → ResultAsync seam', () => {
-  it('map_withAnAsyncCallback_isRejected', () => {
-    // @ts-expect-error - cross with .toAsync() first
-    from(okUser()).map(async (u) => u.credit);
+  it('map_withAnAsyncCallback_isTypedAsTheHonestPair', () => {
+    expectTypeOf(from(okUser()).map(async (u) => u.credit)).toEqualTypeOf<
+      ResultChain<number, NotFound> | ResultAsync<number, NotFound>
+    >();
   });
 
   it('map_withAnAsyncCallback_crossesToResultAsyncViaToAsync', () => {
@@ -329,9 +330,11 @@ describe('the ResultChain → ResultAsync seam', () => {
    * a sync-first order accepts an async tee **silently**, drops the `await`, and
    * returns a `ResultChain` that settled before the tee ran.
    */
-  it('inspect_withAnAsyncCallback_isRejectedRatherThanSwallowed', () => {
-    // @ts-expect-error - the void-return rule would otherwise hide this
-    from(okUser()).inspect(async () => {});
+  it('inspect_withAnAsyncCallback_isTypedRatherThanSwallowed', () => {
+    // The void-return rule would otherwise hide this entirely.
+    expectTypeOf(from(okUser()).inspect(async () => {})).toEqualTypeOf<
+      ResultChain<User, NotFound> | ResultAsync<User, NotFound>
+    >();
   });
 
   it('inspect_withAnAsyncCallback_crossesToResultAsyncViaToAsync', () => {

@@ -1,3 +1,5 @@
+import type { Result } from './result';
+
 /**
  * Detects a thenable, not specifically a `Promise` — and the distinction is a
  * correctness fix, not a stylistic one (spec §10.6).
@@ -113,73 +115,75 @@ export function isThenable(x: unknown): x is PromiseLike<unknown> {
 }
 
 /**
- * `true` only for `any`, via the one idiom that detects it: `any` is
- * simultaneously assignable to and from everything, so it is the sole type for
- * which `0 extends 1 & T` holds.
+ * The **static** counterpart of {@link isThenable}, and the second half of the
+ * same decision (spec §10.7, widened by §10.9, relocated by §10.11).
  *
- * {@link NoThenableReturn} needs this because `Extract<any, PromiseLike<unknown>>`
- * is **not** `never` — a conditional over `any` takes both branches, so it
- * reduces to `PromiseLike<unknown>` and the guard would fire. That would reject
- * every callback whose return type is `any`: an untyped JS callback, a
- * `vi.fn()` mock, anything crossing an untyped library boundary. `any` asserts
- * nothing about whether a promise is involved, so the honest answer is to let it
- * through rather than to reject on a technicality. `unknown` needs no such
- * carve-out — it extracts to `never` and passes already.
+ * A transform over a settled `Result` cannot promise an asynchronous output: it
+ * may never call the callback at all, so on the short-circuit branch there is no
+ * thenable to detect and the settled `Result` comes straight back. When the
+ * callback's return type admits a thenable, the outcome is therefore genuinely
+ * **branch-dependent**, and this says so.
+ *
+ * **It lives in the return type, and that position is the decision** (§10.11).
+ * The first implementation spread the same conditional as a *rest parameter* so
+ * the call could be rejected outright. That works only when `U` is resolved at
+ * the call site: against an unresolved type parameter a conditional never
+ * reduces, so the guarded arm stopped matching and **every generic wrapper over
+ * `Result` failed to compile** —
+ *
+ * ```ts
+ * function helper<A, B>(r: Result<A, string>, f: (a: A) => B) {
+ *   return map(r, f);   // TS2769 under the parameter-position guard
+ * }
+ * ```
+ *
+ * — with no escape, since the guard type was not exported. It also had to
+ * carve out `any` (whose conditional takes both branches and so always looked
+ * thenable), and that carve-out let an `any`-returning callback claim a settled
+ * `Result` while the runtime handed back a promise: the very failure the guard
+ * existed to prevent, reintroduced by its own workaround.
+ *
+ * A conditional in *return* position has neither problem. It defers harmlessly
+ * for a generic `U` and resolves once `U` is known, and `any` needs no special
+ * case — it extracts to `PromiseLike<unknown>`, lands in the honest branch, and
+ * gets the union it deserves. When `U` holds no thenable this **is** the plain
+ * `Result<U, E>`, so ordinary synchronous code is unchanged.
+ *
+ * `await` collapses the union to the settled `Result`, which is what a caller
+ * doing async work writes anyway.
  */
-type IsAny<T> = 0 extends 1 & T ? true : false;
+export type SettledOr<U, R> = [Extract<U, PromiseLike<unknown>>] extends [never]
+  ? R
+  : R | Promise<R>;
 
 /**
- * The **static** counterpart of {@link isThenable}, and the second half of the
- * same decision (spec §10.7, widened by §10.9).
+ * Whether a value is a **settled `Result`**, used wherever the alternative is a
+ * promise *of* one — and the fix for the hole §10.9 left open (§10.11).
  *
- * It rejects **any** callback whose return type can be a thenable, on a
- * transform whose input is a settled `Result`. Two defects converge here:
+ * `isThenable` alone cannot make that call. §2 makes the union purely structural
+ * with no brand, so any `{ ok: true, value }` **is** an `Ok<T>` — including one
+ * that also carries a `then`, which excess-property checking never sees because
+ * it fires only on fresh object literals. Ask "is this thenable?" first and such
+ * a value is assimilated: the transform returns a `Promise` where its signature
+ * promised a settled `Result`, `.ok` reads `undefined`, and a success is
+ * reported as a failure. That reproduced on all six members of both surfaces.
  *
- * 1. §10.7 — a callback returning `U | Promise<U>` (`cache.get(id) ??
- *    fetch(id)`) matched the sync arm with `U` = the whole union, so the caller
- *    was promised a settled `Result` and handed a `Promise` whenever the value
- *    happened to arrive asynchronously.
- * 2. §10.9 — a *purely* async callback had its own arm, which promised a
- *    `Promise` the implementation could not always deliver: on the short-circuit
- *    branch the callback never runs, so there is no thenable to detect and the
- *    settled `Result` came straight back. That arm is gone, and this guard is
- *    what now catches those calls.
+ * Asking "is this a `Result`?" first resolves it, because the two shapes are
+ * distinguishable in the direction that matters: **a `Result` has a boolean
+ * `ok`, and a promise of one does not.** So this is checked *before* falling
+ * back to the thenable path, and §10.6's cross-realm fix is untouched — a
+ * foreign `Promise<Result>` has no `ok`, still fails this, and still awaits.
  *
- * Both produce the same failure — `.ok` reads `undefined`, the err branch is
- * silently taken, `.error` is `undefined` though no error occurred — and both
- * are data-dependent, so they survive testing.
- *
- * The rule underneath is §10.9's: **a synchronous `Result` input cannot produce
- * an asynchronous output**, because the transform may never call the callback at
- * all. Async work starts from a promise — `map(Promise.resolve(r), fn)`, or
- * `chain.toAsync()` on the fluent surface — where the output is a promise on
- * every branch.
- *
- * This rejects those at the call site. Spreading it as a **rest
- * parameter** is what makes it work: `U` stays in a naked inference position in
- * the callback's return type, so inference is untouched, and the conditional is
- * evaluated only *after* `U` is known. Encoding the same check as
- * `U extends PromiseLike<unknown> ? never : U` on the parameter itself does not
- * work — a conditional type is not an inference site, so `U` collapses to
- * `unknown` and every call site degrades.
- *
- * When `U` contains no thenable this is the empty tuple: no extra argument, and
- * the resolved signature is byte-identical to what it was without the guard.
- * When it does, the call requires an argument that cannot be supplied, and the
- * label is the diagnostic.
- *
- * @remarks
- * This restores a symmetry the surface had already half-committed to: the sync
- * arms of `andThen`, `orElse`, and `safeUnwrap` demand a `Result`, so the same
- * union was always a loud compile error there. Half the surface said no; half
- * lied quietly. Note that the *promise-input* arms deliberately still accept the
- * union — spec §5.2 grants them that shape, and it is safe there because the
- * returned promise flattens it.
+ * Deliberately narrower than `isOk`/`isErr`: those answer *which half*, this
+ * answers *settled or pending*, and only the second question is being asked at
+ * these call sites.
  */
-export type NoThenableReturn<U> = IsAny<U> extends true
-  ? []
-  : [Extract<U, PromiseLike<unknown>>] extends [never]
-  ? []
-  : [
-      error: 'This callback can return a promise, so the result would be settled or pending depending on the data. A synchronous Result input cannot produce an asynchronous output: await the value inside the callback, or start from a promise — map(Promise.resolve(r), fn) in the core, or chain.toAsync().map(fn) on the fluent surface.',
-    ];
+export function isSettledResult<T, E>(
+  x: Result<T, E> | PromiseLike<Result<T, E>>,
+): x is Result<T, E> {
+  return (
+    typeof x === 'object' &&
+    x !== null &&
+    typeof (x as { ok?: unknown }).ok === 'boolean'
+  );
+}
