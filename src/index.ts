@@ -10,6 +10,7 @@ export {
   type ErrorCtor,
   type TypedError,
 } from './core/error';
+export { groupByType, prettifyErrors } from './core/format';
 export {
   fromNullable,
   fromPredicate,

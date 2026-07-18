@@ -199,6 +199,13 @@ On the fluent side, `.isOk()` / `.isErr()` return **plain booleans** and buy you
 | `combineWithAllErrors(results)` | Same, but collects *every* error into an array |
 | `partition(results)` | Split into `[values, errors]` — both halves, always |
 
+**Formatters** — presentation over the `TypedError[]` that `combineWithAllErrors` accumulates
+
+| | |
+|---|---|
+| `groupByType(errors)` | Group by the `type` discriminant; each group keeps its narrowed variant |
+| `prettifyErrors(errors)` | One `✖ type: message` line per error |
+
 **Interop**
 
 | | |
@@ -309,6 +316,30 @@ switch (error.type) {
 ```
 
 Each constructor also carries `.type`, readable without building a value, and a `.is()` guard for narrowing a union at runtime.
+
+### Presenting accumulated errors
+
+`combineWithAllErrors` collects *every* failure rather than stopping at the first, which is the shape you want for form validation or a batch job. Two helpers turn that array into something you can use:
+
+```ts
+import { combineWithAllErrors, groupByType, prettifyErrors } from '@zireal/result-kit';
+
+const combined = combineWithAllErrors([checkName(input), checkAge(input), checkEmail(input)]);
+
+if (!combined.ok) {
+  console.error(prettifyErrors(combined.error));
+  // ✖ too_short: Name must be at least 2 characters
+  // ✖ out_of_range: Age must be between 13 and 120
+
+  const groups = groupByType(combined.error);
+  groups.too_short?.forEach((e) => highlight(e.details?.field));
+  //     ^? TooShort[] — the variant's own `details`, not the union's
+}
+```
+
+`groupByType`'s keys are **optional**, because a variant that did not occur has no key — `groups.out_of_range` is `OutOfRange[] | undefined`. That is deliberate: typing an absent group as present would hand you `undefined` under a type promising an array.
+
+`prettifyErrors` reads only `type` and `message`, never `details`. That is **not** a redaction guarantee, though: a variant whose message is computed from its payload (`(d) => \`No user ${d.id}\``) has already put that data in `message`. Keep anything sensitive out of `message` — no formatter can take it back out.
 
 ---
 

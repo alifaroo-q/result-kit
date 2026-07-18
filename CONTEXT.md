@@ -52,6 +52,14 @@ _Avoid_: gen (Effect's name), doNotation, attempt, tryCatch, safeTryAsync (no su
 The **root-only** adapter that makes a plain **Result** `yield*`-able inside a **safeTry** block: it yields the **Err** that short-circuits and returns the unwrapped value, so `const v = yield* safeUnwrap(r)` binds `T`. Iterability lives here rather than on the union — putting `[Symbol.iterator]` on what `ok()` / `err()` produce would reopen the no-brand guarantee, and with it the JSON round-trip, for the sake of optional sugar. `/fluent` has **no** `safeUnwrap`, because **ResultChain** and **ResultAsync** are self-iterable; root's still works inside a fluent block for unwrapping a *plain* union.
 _Avoid_: unwrap (that token means "throws" across the genre and is deliberately unused), bind, yieldResult, $ (neverthrow deprecated its `safeUnwrap` in favour of iterable data — we did not, and the reasoning differs: their data is already a class).
 
+**groupByType**:
+The formatter that keys an accumulated `TypedError[]` by each error's **type** discriminant, returning a **partial** record whose groups keep their narrowed variant. Partial because a variant that did not occur has no key — typing an absent group as present would hand back `undefined` under a type that promised an array. Pure: the grouped errors are the same objects, and input order survives within a group.
+_Avoid_: groupBy, byType, format (that's the zod-v3 name for a *tree*, which we cannot build), flatten (zod's name for a `path`-keyed shape we have no `path` for).
+
+**prettifyErrors**:
+The formatter that renders an accumulated `TypedError[]` as one human-readable line per error — `✖ <type>: <message>`. Reads **type** and **message** only, never **details**; an empty input gives an empty string rather than a placeholder, so the output composes into a larger message. Not a redaction mechanism: a variant's **message** may already have been computed from its payload.
+_Avoid_: prettifyError (zod's name; ours takes the array, not an error object), format, toString, render, stringify.
+
 ## Relationships
 
 - A failed **Result** carries an `error` of type `E`; when the producer opts into the convention, that `E` is a **TypedError**.
@@ -59,6 +67,7 @@ _Avoid_: unwrap (that token means "throws" across the genre and is deliberately 
 - An error union is built from **defineError** constructors' return types (`ReturnType<typeof notFound> | …`), each with its own typed **details**.
 - **ResultChain** and **ResultAsync** wrap a **Result**; `.toResult()` is the way back out, and the plain union is what crosses a boundary. `.toAsync()` is the one explicit seam from the sync wrapper to the async one.
 - **safeTry** consumes what **safeUnwrap** (or a self-iterable wrapper) yields. The two are always used together: **safeUnwrap** only ever appears inside a **safeTry** block.
+- **combineWithAllErrors** produces the accumulated `TypedError[]` that **groupByType** and **prettifyErrors** consume, and is their motivating source. It is not the only one: `partition`'s second half is also an error array, and is equally valid input.
 - The wrappers are **opt-in ergonomics**, never a requirement — the free-function core is self-sufficient and never needs `/fluent`. That split is what makes the core tree-shakable.
 
 ## Example dialogue
