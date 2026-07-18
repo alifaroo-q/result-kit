@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
-import { defineError, err, isTypedError } from '../../src/index';
+import { defineError, err, isTypedError, unwrapOrThrow } from '../../src/index';
 import type { TypedError } from '../../src/index';
 
 // The three canonical variants of §3.1, defined once: a payload variant whose
@@ -294,5 +294,51 @@ describe('serialization', () => {
 
     const result = err(withCause);
     expect(result.error.cause).toBe(cause);
+  });
+});
+
+/**
+ * §10.9. Two guards were narrower or broader than the type they publish — the
+ * same invariant §10.8 derived for `isThenable`, found in a pre-freeze retro.
+ */
+describe('the guards against the shapes their own types admit (#36 retro)', () => {
+  it('isTypedError accepts a callable TypedError, which the type admits', () => {
+    // A function carrying `type` and `message` is a structurally valid
+    // TypedError — tsc assigns it without complaint — but `typeof x !== 'object'`
+    // rejected it, and unwrapOrThrow then discarded its real message.
+    const callable = Object.assign((n: number) => n + 1, {
+      type: 'rate_limited',
+      message: 'slow down, please',
+    });
+
+    expect(isTypedError(callable)).toBe(true);
+  });
+
+  it('isTypedError still rejects a function with no type or message', () => {
+    expect(isTypedError(() => 'plain')).toBe(false);
+  });
+
+  it('unwrapOrThrow surfaces a callable TypedError message rather than the fallback', () => {
+    const callable = Object.assign((n: number) => n + 1, {
+      type: 'rate_limited',
+      message: 'slow down, please',
+    });
+
+    expect(() => unwrapOrThrow(err(callable))).toThrow('slow down, please');
+  });
+
+  it('ErrorCtor.is rejects a tag-only object, whose message the predicate guarantees', () => {
+    // `.is()` narrows to TypedError, whose `message: string` is required. A
+    // tag-only object passed, so `e.message` was `undefined` under a guard
+    // promising a string.
+    const notFound = defineError('not_found', 'not found');
+
+    expect(notFound.is({ type: 'not_found' })).toBe(false);
+  });
+
+  it('ErrorCtor.is still accepts a well-formed variant', () => {
+    const notFound = defineError('not_found', 'not found');
+
+    expect(notFound.is(notFound())).toBe(true);
   });
 });
