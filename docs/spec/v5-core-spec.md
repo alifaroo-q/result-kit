@@ -677,7 +677,9 @@ The decisive argument is **semver honesty**, not "next free number". Those versi
 
 ### 8.2 Version bump — hand-set, no changeset
 
-`package.json` currently declares the burned `1.2.0`, so a `major` changeset would compute `2.0.0` and `changeset publish` would **403**. Therefore:
+`package.json` currently declares the burned `1.2.0`, so a `major` changeset would compute `2.0.0` and `changeset publish` would fail. Therefore:
+
+> **Observed, not predicted (2026-07-18, during [#32](https://github.com/alifarooq-zk/result-kit/issues/32)).** This section said the failure would be a **403**. It is an **E400** — `Cannot publish over previously published version "1.2.0"` — seen on every push to `main` since the rework began, because `changeset publish` reads npm's `versions` list, does not find the burned `1.2.0` there, and concludes it is unpublished. The registry disagrees, since `time` still records it. The verdict is unchanged and the mechanism is exactly as described; only the status code was wrong. Recorded because this document's own §10 rule is to cite the observation rather than the expectation.
 
 1. Set `package.json` `version` directly: `1.2.0` → **`5.0.0`**.
 2. Hand-write the `## 5.0.0` `CHANGELOG.md` entry (§8.4).

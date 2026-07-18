@@ -54,7 +54,7 @@
 
 ## Release Guidance
 
-- **During the v5 rework, add no changesets.** Spec §8.2 knowingly overrides the rule below, for the `5.0.0` release only: `package.json` still declares the burned `1.2.0`, so a `major` changeset would compute `2.0.0` and `changeset publish` would **403**. [#32](https://github.com/alifarooq-zk/result-kit/issues/32) hand-sets `5.0.0` and hand-writes the changelog entry. Resume the normal flow below from `5.0.1` / `5.1.0` onward.
+- **During the v5 rework, add no changesets.** Spec §8.2 knowingly overrides the rule below, for the `5.0.0` release only: `package.json` still declares the burned `1.2.0`, so a `major` changeset would compute `2.0.0` and `changeset publish` would fail (observed: **E400** *Cannot publish over previously published version*, not the 403 the spec first predicted). [#32](https://github.com/alifarooq-zk/result-kit/issues/32) hand-sets `5.0.0` and hand-writes the changelog entry. Resume the normal flow below from `5.0.1` / `5.1.0` onward.
 - For any consumer-facing bug fix, feature, or breaking change, add a changeset before finishing the work.
 - Use `pnpm changeset` to create the changeset file.
 - Choose the version bump based on impact:
