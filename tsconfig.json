@@ -19,5 +19,11 @@
     "verbatimModuleSyntax": true,
     "types": ["node", "vitest/globals"]
   },
-  "include": ["src", "test", "vitest.config.ts", "tsdown.config.ts"]
+  "include": [
+    "src",
+    "test",
+    "examples",
+    "vitest.config.ts",
+    "tsdown.config.ts"
+  ]
 }

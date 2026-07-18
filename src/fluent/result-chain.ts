@@ -127,8 +127,14 @@ const inspectErrUnguarded = coreInspectErr as unknown as <T, E>(
  * side without being restated.
  *
  * **The wrapper mirrors only single-instance functions.** Array- and
- * entry-shaped ones — `combine`, `partition`, `from*`, `isTypedError` — stay
- * free-function-only; re-enter fluent-land with `from(...)`.
+ * entry-shaped ones — `combine`, `combineWithAllErrors`, `partition`,
+ * `isTypedError`, and the sync constructors `fromNullable` / `fromPredicate` /
+ * `fromThrowable` — get no *method* here; re-enter fluent-land with `from(...)`.
+ *
+ * That is a statement about **methods on this class**, not about what `/fluent`
+ * exports: `fromPromise` and `fromThrowableAsync` are free functions on that
+ * entrypoint (§6.3 as amended by §10.5). An earlier version of this note wrote
+ * "`from*`", which read as the latter and was false.
  *
  * @remarks
  * `ResultChain` was named by **spec §10.1, not by any ADR** — all eight say "the
