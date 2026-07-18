@@ -545,6 +545,27 @@ describe('safeTry releases the generator on short-circuit (#36 retro)', () => {
     expect(open).toBe(0);
   });
 
+  it('waits for an async finally before settling, not merely scheduling it', async () => {
+    // Discriminating probe: a synchronous `finally` body runs before the
+    // microtask boundary, so it passes even without awaiting `.return()`. Only
+    // cleanup that itself awaits proves the caller's promise waits for it.
+    const log: string[] = [];
+
+    await safeTry(async function* () {
+      try {
+        const v = yield* safeUnwrap(
+          Promise.resolve(err({ type: 'boom' } as const)),
+        );
+        return ok(v);
+      } finally {
+        await Promise.resolve();
+        log.push('cleaned');
+      }
+    });
+
+    expect(log).toEqual(['cleaned']);
+  });
+
   it('runs a finally block when an async body short-circuits', async () => {
     const log: string[] = [];
 

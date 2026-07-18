@@ -15,7 +15,9 @@ import {
   partition,
   safeTry,
   safeUnwrap,
+  toNullable,
   unwrapOrElse,
+  unwrapOrThrow,
 } from '../../src/index';
 import type { Result } from '../../src/index';
 
@@ -127,6 +129,20 @@ describe('the mixed value-or-promise callback (#36)', () => {
 
     expectTypeOf(settled).toEqualTypeOf<Result<number, NotFound>>();
     expect(settled).toEqual(ok(10));
+  });
+
+  it('awaits the value type on the promise-input arm, rather than nesting it', () => {
+    // Discriminating probe for `Awaited<U>`: the pure-async callback resolves
+    // via the separate PromiseLike arm, so only a MIXED callback reaches the
+    // naked-U arm where the Awaited matters. §5.2 grants the promise-input arms
+    // this shape deliberately.
+    expectTypeOf(
+      map(Promise.resolve(okUser()), (u) => lookupCredit(String(u.credit))),
+    ).toEqualTypeOf<Promise<Result<number, NotFound>>>();
+
+    expectTypeOf(
+      mapErr(Promise.resolve(okUser()), (e) => lookupCredit(e.id)),
+    ).toEqualTypeOf<Promise<Result<User, number>>>();
   });
 
   it('accepts the same async work once the input is a promise', () => {
@@ -602,6 +618,49 @@ describe('generic code can still call the transforms (#38 retro)', () => {
   it('still types a plain sync callback as a settled Result', () => {
     expectTypeOf(map(ok(1), (v) => `n${v}`)).toEqualTypeOf<
       Result<string, never>
+    >();
+  });
+});
+
+/**
+ * §10.11. #37 fixed the `E` channel and claimed to cover "wherever a narrow half
+ * leaves it no inference site". `err()` returns the narrow `Err<E>`, which
+ * leaves **`T`** with no inference site — the exact mirror — and that half was
+ * never done. Found by an adversarial review, and it is the same failure the
+ * fix's own commit message warned about: trusting a stated scope instead of
+ * grepping the class.
+ */
+describe('a transform over a bare err() infers T as never (#38 retro)', () => {
+  it('mapErr flows onward instead of producing Result<unknown, F>', () => {
+    const out = mapErr(err(notFound), (e) => e.id);
+
+    expectTypeOf(out).toEqualTypeOf<Result<never, string>>();
+    const annotated: Result<number, string> = out;
+    expect(annotated).toEqual(err('u1'));
+  });
+
+  it('inspectErr, orElse and partition do the same', () => {
+    expectTypeOf(inspectErr(err(notFound), () => {})).toEqualTypeOf<
+      Result<never, NotFound>
+    >();
+    expectTypeOf(orElse(err(notFound), () => ok(1))).toEqualTypeOf<
+      Result<number, never>
+    >();
+
+    const [oks] = partition([err(notFound)]);
+    expectTypeOf(oks).toEqualTypeOf<never[]>();
+  });
+
+  it('toNullable and unwrapOrThrow do the same', () => {
+    expectTypeOf(toNullable(err(notFound))).toEqualTypeOf<never | null>();
+    expectTypeOf(unwrapOrThrow(ok(1))).toEqualTypeOf<number>();
+  });
+
+  it('still infers a real success type rather than masking it', () => {
+    // The mirror of #37's masking check, and it needs the same exact-type
+    // assertion: Result<never, F> assigns into every Result<T, F>.
+    expectTypeOf(mapErr(errUser(), (e) => e.id)).toEqualTypeOf<
+      Result<User, string>
     >();
   });
 });

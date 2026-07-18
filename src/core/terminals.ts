@@ -59,7 +59,7 @@ const UNWRAP_FAILED = 'unwrapOrThrow called on an Err';
  * `cases` object always supplies an `err`, so the default never fires on an
  * inferred call and cannot silently collapse the union.
  */
-export function match<T, E = never, UOk = never, UErr = UOk>(
+export function match<T = never, E = never, UOk = never, UErr = UOk>(
   result: Result<T, E>,
   cases: { ok: (value: T) => UOk; err: (error: E) => UErr },
 ): UOk | UErr {
@@ -111,7 +111,7 @@ export function unwrapOrElse<T, E = never>(result: Result<T, E>, fn: (error: E) 
  * typechecks — the migration's only silent break. Map to HTTP in your own
  * exception filter.
  */
-export function unwrapOrThrow<T, E>(result: Result<T, E>, message?: string): T {
+export function unwrapOrThrow<T = never, E = never>(result: Result<T, E>, message?: string): T {
   if (result.ok) return result.value;
 
   const { error } = result;
@@ -127,6 +127,6 @@ export function unwrapOrThrow<T, E>(result: Result<T, E>, message?: string): T {
  *
  * `null`, not `undefined` — one empty value, and the JSON-safe one.
  */
-export function toNullable<T, E>(result: Result<T, E>): T | null {
+export function toNullable<T = never, E = never>(result: Result<T, E>): T | null {
   return result.ok ? result.value : null;
 }
