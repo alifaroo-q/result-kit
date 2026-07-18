@@ -64,9 +64,17 @@ export type ErrorCtor<TType extends string, TData> = ([TData] extends [void]
   readonly type: TType;
 
   /**
-   * Per-variant guard. **Tag-only** (`x.type === type`) — it narrows an error
-   * union cheaply but cannot validate the typed payload at runtime; that needs
-   * a schema.
+   * Per-variant guard. **Tag-plus-`message`** — it narrows an error union
+   * cheaply but cannot validate the typed payload at runtime; that needs a
+   * schema.
+   *
+   * It checks `message` as well as the tag (§10.9), which the original tag-only
+   * version did not. `message: string` is the one field `TypedError` promises
+   * unconditionally, and this predicate narrows *to* `TypedError` — so a
+   * tag-only object passed the guard and left `e.message` `undefined` under a
+   * type asserting `string`. The `@remarks` disclaimer covers the *payload*;
+   * `message` is not payload. Checking it costs nothing and keeps the tag-only
+   * spirit intact.
    */
   is(x: unknown): x is TypedError<TType, [TData] extends [void] ? never : TData>;
 };
@@ -108,9 +116,10 @@ function build<TType extends string, TData>(
   return Object.assign(ctor, {
     type,
     is: (x: unknown): boolean =>
-      typeof x === 'object' &&
+      (typeof x === 'object' || typeof x === 'function') &&
       x !== null &&
-      (x as { type?: unknown }).type === type,
+      (x as { type?: unknown }).type === type &&
+      typeof (x as { message?: unknown }).message === 'string',
   }) as unknown as ErrorCtor<TType, TData>;
 }
 
@@ -201,6 +210,13 @@ export const defineError = Object.assign(defineErrorBase, { withData });
  *
  * Structural and tag-agnostic: it checks for a `string` `type`, a `string`
  * `message`, and — when `details` is present — a non-null, non-array object.
+ *
+ * The object test admits a **function** as well (§10.9), for the same reason
+ * §10.8 widened `isThenable`: a callable carrying `type` and `message` is a
+ * structurally valid `TypedError` and tsc assigns it without complaint, so a
+ * guard that rejected it was narrower than the type it publishes. That gap was
+ * not academic — `unwrapOrThrow` consumes this guard, so it silently replaced
+ * such an error's real message with the generic fallback.
  * That last check is what keeps the narrowing honest: this guard lands on the
  * base `TypedError`, whose `TData` takes the interface's
  * `Record<string, unknown>` default, and an array or `null` is not a `Record`.
@@ -210,7 +226,7 @@ export const defineError = Object.assign(defineErrorBase, { withData });
  */
 export function isTypedError(x: unknown): x is TypedError {
   if (
-    typeof x !== 'object' ||
+    (typeof x !== 'object' && typeof x !== 'function') ||
     x === null ||
     typeof (x as { type?: unknown }).type !== 'string' ||
     typeof (x as { message?: unknown }).message !== 'string'
