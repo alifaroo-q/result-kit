@@ -144,6 +144,38 @@ type ApiError = ReturnType<typeof notFound> | ReturnType<typeof forbidden>;
 
 `TypedErrorOf` (a redundant alias) and `TypedErrorUnion` (distributes tags into same-*default*-payload variants, fighting the per-variant typed payload). `isTypedError` is **kept, unchanged in name**. v1's separate typed `fail` constructor collapses into the single generic `err` — the typed convention is expressed by *what you pass*, not a second constructor.
 
+### 3.4 Formatters (2)
+
+Source: **[ADR 0010](../adr/0010-v2-error-formatter-helpers.md)**, [#18](https://github.com/alifarooq-zk/result-kit/issues/18). Added 2026-07-18, at the maintainer's direction, **before** the release rather than as the post-release additive minor ADR 0004 §4 had deferred them to — so the API freezes with them in and there is no second cut.
+
+They live in §3 rather than §5 because they operate on `TypedError[]`, not on a `Result`. They are exported from the root barrel like everything else (§5.9), and are free, pure, standalone functions — a consumer who imports neither ships neither.
+
+```ts
+export function groupByType<E extends TypedError<string, unknown>>(
+  errors: readonly E[],
+): { [K in E['type']]?: Extract<E, { type: K }>[] };
+
+export function prettifyErrors(errors: readonly TypedError<string, unknown>[]): string;
+```
+
+```ts
+const combined = combineWithAllErrors([ok(1), err(notFound({ id: 'u1' })), err(forbidden())]);
+
+if (!combined.ok) {
+  groupByType(combined.error);   // { not_found?: NotFound[]; forbidden?: Forbidden[] }
+  prettifyErrors(combined.error);      // "✖ not_found: No user u1\n✖ forbidden: Not permitted"
+}
+```
+
+Four constraints, each argued in full in ADR 0010:
+
+1. **Zod's tree formatters are not portable, and that is a finding rather than a shortfall.** `treeifyError` and the deprecated `formatError` are **entirely** path-derived; `flattenError` is path-keyed too, bucketing on `path.length === 0` and keying on `path[0]`. All three need a `path`, which §3 has none of ([ADR 0002 §3](../adr/0002-v2-typederror-model.md) rejected a top-level `path` as validation-specific). No path, no tree — and no `formErrors`/`fieldErrors` split either, since that split is just `path.length === 0`.
+2. **Nothing positional is available either.** §5.4's `combineWithAllErrors` returns a flat `E[]` and does not record which input failed, so which key an error *would* have had is not recoverable from the value being formatted. Any keyed shape must key on something intrinsic — and that is `type`, the discriminant §3 is built around and the structural analog of `ZodIssue.code`.
+3. **`groupByType`'s keys are optional.** A union variant that does not occur has no key; a non-optional `Record<E['type'], E[]>` would type an absent group as present and hand back `undefined` — §10.6's failure mode. Each present group keeps its **narrowed** variant, which is the reason this is a function rather than a documented `Object.groupBy` one-liner. Precisely: `Object.groupBy` keeps the literal keys and their optionality, and loses only the per-group *value* type — its groups are `AppError[]`, not `NotFound[]`. That difference is the whole justification; an earlier draft claimed the keys were lost too, and that was false.
+4. **`prettifyErrors` never reads `details`, and that is not redaction.** §3.1 lets a variant's `message` be *computed from* its payload, so a message may already carry interpolated fields; `prettifyErrors` neither adds to nor strips from it. Keep sensitive fields out of `message` — no formatter can undo that. An empty input returns `''`, not a placeholder, so the output composes into a larger message.
+
+> **Recorded because the shape of the mistake recurs.** A first draft of ADR 0010 and of the implementation's own doc comment claimed `prettifyErrors` "does not leak the payload". The test written to assert it **failed**, correctly: `defineError('not_found', (d) => \`No user ${d.id}\`)` puts the payload in `message` before any formatter runs. The narrow claim ("never reads `details`") is true and useful; the broad one was false and would have read as a security property. Pinned by two tests, one for each half.
+
 ## 4. Architecture
 
 Source: [ADR 0001](../adr/0001-v2-core-api-paradigm.md), [ADR 0005 §1](../adr/0005-v2-async-strategy.md), [ADR 0006](../adr/0006-v2-package-layout-entrypoints.md).
@@ -151,7 +183,7 @@ Source: [ADR 0001](../adr/0001-v2-core-api-paradigm.md), [ADR 0005 §1](../adr/0
 ```
 ┌─ @zireal/result-kit  (root, `.`) ────────────────────────────┐
 │  Result<T,E> = Ok<T> | Err<E>     ← plain data, no methods   │
-│  27 free functions, data-first, single-signature, no curry   │
+│  29 free functions, data-first, single-signature, no curry   │
 │  async = Promise<Result<T,E>>     ← stdlib; no new type      │
 │  SELF-SUFFICIENT: never needs /fluent                        │
 └──────────────────────────────────────────────────────────────┘
@@ -177,7 +209,7 @@ Three rules govern this split, and every one of them is enforceable:
 
 ## 5. Root entrypoint — `@zireal/result-kit`
 
-**27 free functions.** Data-first, **one signature, no currying, no data-last variants** — the auto-curry tree-shaking trap is why. Async is handled by overloads, never by an `Async`-suffixed twin.
+**29 free functions.** Data-first, **one signature, no currying, no data-last variants** — the auto-curry tree-shaking trap is why. Async is handled by overloads, never by an `Async`-suffixed twin.
 
 ### 5.1 Constructors & guards (6)
 
@@ -403,11 +435,12 @@ export type { OkTypeOf, ErrTypeOf };        // §5.4 — see §10
 
 ### 5.9 Complete root export list
 
-**Values (27):**
+**Values (29):**
 
 | Group | Exports |
 |---|---|
 | Constructors & guards (6) | `ok` `err` `isOk` `isErr` `isTypedError` `defineError` |
+| Formatters (2) | `groupByType` `prettifyErrors` |
 | Transforms (6) | `map` `mapErr` `andThen` `orElse` `inspect` `inspectErr` |
 | Terminals (5) | `match` `unwrapOr` `unwrapOrElse` `unwrapOrThrow` `toNullable` |
 | Collections (3) | `combine` `combineWithAllErrors` `partition` |
@@ -566,7 +599,7 @@ Source: [ADR 0006](../adr/0006-v2-package-layout-entrypoints.md).
 ### 7.1 Format, entrypoints, floors
 
 - **ESM-only.** No CJS output, no `.cjs`, no split type files. A CJS consumer reaches 5.0.0 via `require(esm)` (guaranteed by the Node floor) or dynamic `import()`. Consequence: a **single `.d.ts` per entry**, and the "masquerading types" dual-package hazard **cannot occur**.
-- **Exactly three entrypoints:** `.` (flat, self-tree-shakable barrel — all 27 functions + the 7 public types) · `./fluent` · `./package.json`. The v1 `./core`, `./fp-ts`, `./nest` are **all removed**. No `/esm` deep-path hack. No category subpaths.
+- **Exactly three entrypoints:** `.` (flat, self-tree-shakable barrel — all 29 functions + the 7 public types) · `./fluent` · `./package.json`. The v1 `./core`, `./fp-ts`, `./nest` are **all removed**. No `/esm` deep-path hack. No category subpaths.
 - **`engines.node` = `>=22.12`** — raised from v1's `>=20` to align with unflagged `require(esm)`, so *every* supported Node can load the ESM-only package.
 - **Emit target `ES2023`** — all native on the Node floor; no downleveling.
 - **Dev toolchain: TypeScript 7 (`tsgo`)** for the 8–12× typecheck speedup. ~~**Caveat:** TS 7 does not yet expose a stable programmatic API (promised for 7.1), so tools embedding the compiler API — notably **`attw`** — may need to pin the TS 6 line. This does not affect emit.~~ — **Caveat closed by [#21](https://github.com/alifarooq-zk/result-kit/issues/21) (2026-07-16); do not re-investigate.** `typescript@7.0.2` landed with **no TS 6 fallback and no `attw` pin**. `@arethetypeswrong/core` hard-pins its own `typescript@5.6.1-rc` as a *regular dependency* and resolves it nested, so it never loads the project's TypeScript and cannot break on the jump. `.d.ts` generation via `rolldown-plugin-dts` also works (it warns that the 7.0 API is experimental, but emits correctly). The real constraint turned out to be **tsdown's peer range** — `0.21.4` declares `typescript: "^5.0.0"`, which TS 7 violates; `0.22.8` widens it to `"^5.0.0 || ^6.0.0 || ^7.0.0"`. The tsdown upgrade is what enabled the jump. `tsc`'s binary name is unchanged, so `pnpm check` needed no edit — "tsgo" was the name of the *preview* package (`@typescript/native-preview`), superseded by `typescript@7`.

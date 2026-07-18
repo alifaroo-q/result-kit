@@ -17,14 +17,17 @@
 import {
   andThen,
   combine,
+  combineWithAllErrors,
   defineError,
   err,
+  groupByType,
   isErr,
   isOk,
   map,
   match,
   ok,
   partition,
+  prettifyErrors,
   safeTry,
   safeUnwrap,
   unwrapOr,
@@ -266,4 +269,45 @@ export function splitUsers(ids: readonly string[]): {
   const [found, missing] = partition(ids.map(findUser));
 
   return { found, missing };
+}
+
+/* -------------------------------------------------------------------------- */
+/* 6. Presenting accumulated errors                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `combineWithAllErrors` collects *every* failure instead of stopping at the
+ * first — the shape a form or a batch job wants.
+ */
+function validateAll(
+  ids: readonly string[],
+): Result<readonly User[], (NotFound | Forbidden)[]> {
+  return combineWithAllErrors(
+    ids.map((id) => andThen(findUser(id), requireAdmin)),
+  );
+}
+
+/** One `✖ type: message` line per error — reads `type` and `message` only. */
+export function report(ids: readonly string[]): string {
+  const combined = validateAll(ids);
+
+  return combined.ok ? '' : prettifyErrors(combined.error);
+}
+
+/**
+ * Grouping keeps each variant's **narrowed** type, which is the whole reason
+ * this is a function rather than an `Object.groupBy` one-liner — that returns
+ * the same object and throws the discriminant away.
+ *
+ * The keys are **optional**: a variant that did not occur has no key.
+ */
+export function missingIds(ids: readonly string[]): readonly string[] {
+  const combined = validateAll(ids);
+
+  if (combined.ok) return [];
+
+  const groups = groupByType(combined.error);
+
+  //         ↓ NotFound[] | undefined — `details` is this variant's own payload
+  return groups.not_found?.map((e) => e.details?.id ?? 'unknown') ?? [];
 }

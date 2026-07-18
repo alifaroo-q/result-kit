@@ -315,6 +315,7 @@ Most of this has no v1 equivalent, so it is not a rename — and several items a
 | **`fromPredicate` type-guard overload** | Narrows `T` when the predicate is a type guard |
 | **`ok()` no-arg overload** | For the `Result<void, E>` case |
 | **`partition`** | Present in v1, but now the documented single answer for what `filterSuccesses` / `filterFailures` did separately |
+| **`groupByType` / `prettifyErrors`** | Presentation over the `TypedError[]` that `combineWithAllErrors` accumulates — group by discriminant (keeping each variant's narrowed type), or render one `✖ type: message` line per error |
 
 ---
 
