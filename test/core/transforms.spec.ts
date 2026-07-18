@@ -9,8 +9,13 @@ import {
   inspectErr,
   map,
   mapErr,
+  match,
   ok,
   orElse,
+  partition,
+  safeTry,
+  safeUnwrap,
+  unwrapOrElse,
 } from '../../src/index';
 import type { Result } from '../../src/index';
 
@@ -460,4 +465,89 @@ it('leaves errors thrown by a callback uncaught', () => {
       throw boom;
     }),
   ).toThrow(boom);
+});
+
+/**
+ * §10.10. `ok(1)` returns the narrow `Ok<number>` (§5.1, deliberately), which
+ * gives `E` no inference site — so `E` fell back to `unknown`, and
+ * `Result<number, unknown>` assigns into *no* `Result<T, E>` annotation. The
+ * papercut is the un-annotated intermediate binding; a contextual type on the
+ * binding always worked, which is why it went unnoticed.
+ *
+ * `E` now defaults to `never`, which is also the honest answer: a value built by
+ * `ok(1)` genuinely has no error channel.
+ */
+describe('a transform over a bare constructor (#37)', () => {
+  it('infers a never error channel rather than unknown, so it flows onward', () => {
+    const noCtx = map(ok(1), (v) => v + 1);
+
+    expectTypeOf(noCtx).toEqualTypeOf<Result<number, never>>();
+  });
+
+  it('lets that binding satisfy any Result annotation', () => {
+    const noCtx = map(ok(1), (v) => v + 1);
+    const annotated: Result<number, NotFound> = noCtx;
+
+    expect(annotated).toEqual(ok(2));
+  });
+
+  it('still infers a real error channel rather than masking it', () => {
+    // The check the default must not break: assignability alone cannot prove
+    // this, because Result<T, never> assigns into every Result<T, E>.
+    const real = map(okUser(), (u) => u.credit);
+
+    expectTypeOf(real).toEqualTypeOf<Result<number, NotFound>>();
+  });
+
+  it('still accumulates the error union through andThen', () => {
+    const acc = andThen(okUser(), validate);
+
+    expectTypeOf(acc).toEqualTypeOf<Result<User, NotFound | Forbidden>>();
+  });
+
+  it('applies to every transform, not just map', () => {
+    expectTypeOf(mapErr(ok(1), (e) => e)).toEqualTypeOf<Result<number, never>>();
+    expectTypeOf(inspect(ok(1), () => {})).toEqualTypeOf<Result<number, never>>();
+    expectTypeOf(inspectErr(ok(1), () => {})).toEqualTypeOf<
+      Result<number, never>
+    >();
+  });
+
+  /**
+   * The blast radius was wider than the ticket, which named only §5.2 — the
+   * §10.6 lesson applied rather than restated: grep the class. `E` reaches a
+   * user-visible position in four more places, and each had the same fallback.
+   */
+  it('reaches the terminals that expose E in a handler parameter', () => {
+    match(ok(1), {
+      ok: (v) => v,
+      err: (e) => {
+        expectTypeOf(e).toEqualTypeOf<never>();
+        return 0;
+      },
+    });
+
+    unwrapOrElse(ok(1), (e) => {
+      expectTypeOf(e).toEqualTypeOf<never>();
+      return 0;
+    });
+  });
+
+  it('reaches partition, which puts E in its output', () => {
+    const [, errs] = partition([ok(1), ok(2)]);
+
+    expectTypeOf(errs).toEqualTypeOf<never[]>();
+  });
+
+  it('reaches safeUnwrap, so a do-notation block over a bare ok flows onward', () => {
+    const out = safeTry(function* () {
+      const v = yield* safeUnwrap(ok(1));
+      return ok(v);
+    });
+
+    expectTypeOf(out).toEqualTypeOf<Result<number, never>>();
+
+    const annotated: Result<number, NotFound> = out;
+    expect(annotated).toEqual(ok(1));
+  });
 });

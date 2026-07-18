@@ -43,16 +43,16 @@ import type { NoThenableReturn } from './thenable';
  * The `Err` branch is passed through by **identity**, not rebuilt — `map` on a
  * failure returns the very same object it was given.
  */
-export function map<T, U, E>(
+export function map<T, U, E = never>(
   result: Result<T, E>,
   fn: (value: T) => U,
   ...reject: NoThenableReturn<U>
 ): Result<U, E>;
-export function map<T, U, E>(
+export function map<T, U, E = never>(
   result: PromiseLike<Result<T, E>>,
   fn: (value: T) => PromiseLike<U>,
 ): Promise<Result<U, E>>;
-export function map<T, U, E>(
+export function map<T, U, E = never>(
   result: PromiseLike<Result<T, E>>,
   fn: (value: T) => U,
 ): Promise<Result<Awaited<U>, E>>;
@@ -91,16 +91,16 @@ export function map(
  * This is v1's `mapError`, renamed. The `Ok` branch is passed through by
  * identity.
  */
-export function mapErr<T, E, F>(
+export function mapErr<T, E = never, F = never>(
   result: Result<T, E>,
   fn: (error: E) => F,
   ...reject: NoThenableReturn<F>
 ): Result<T, F>;
-export function mapErr<T, E, F>(
+export function mapErr<T, E = never, F = never>(
   result: PromiseLike<Result<T, E>>,
   fn: (error: E) => PromiseLike<F>,
 ): Promise<Result<T, F>>;
-export function mapErr<T, E, F>(
+export function mapErr<T, E = never, F = never>(
   result: PromiseLike<Result<T, E>>,
   fn: (error: E) => F,
 ): Promise<Result<T, Awaited<F>>>;
@@ -133,15 +133,15 @@ export function mapErr(
  * union is invisible until a consumer handles an error the types said could not
  * occur.
  */
-export function andThen<T, U, E, F>(
+export function andThen<T, U, E = never, F = never>(
   result: Result<T, E>,
   fn: (value: T) => Result<U, F>,
 ): Result<U, E | F>;
-export function andThen<T, U, E, F>(
+export function andThen<T, U, E = never, F = never>(
   result: PromiseLike<Result<T, E>>,
   fn: (value: T) => PromiseLike<Result<U, F>>,
 ): Promise<Result<U, E | F>>;
-export function andThen<T, U, E, F>(
+export function andThen<T, U, E = never, F = never>(
   result: PromiseLike<Result<T, E>>,
   fn: (value: T) => Result<U, F>,
 ): Promise<Result<U, E | F>>;
@@ -171,15 +171,15 @@ export function andThen(
  * accumulation, and the same warning applies. The `Ok` branch is passed through
  * by identity.
  */
-export function orElse<T, E, U, F>(
+export function orElse<T, E = never, U = never, F = never>(
   result: Result<T, E>,
   fn: (error: E) => Result<U, F>,
 ): Result<T | U, F>;
-export function orElse<T, E, U, F>(
+export function orElse<T, E = never, U = never, F = never>(
   result: PromiseLike<Result<T, E>>,
   fn: (error: E) => PromiseLike<Result<U, F>>,
 ): Promise<Result<T | U, F>>;
-export function orElse<T, E, U, F>(
+export function orElse<T, E = never, U = never, F = never>(
   result: PromiseLike<Result<T, E>>,
   fn: (error: E) => Result<U, F>,
 ): Promise<Result<T | U, F>>;
@@ -206,12 +206,12 @@ export function orElse(
  * Tees a side effect off the `Ok` branch and returns the result **unchanged** —
  * by identity, not a copy.
  */
-export function inspect<T, E, R>(
+export function inspect<T, E = never, R = unknown>(
   result: Result<T, E>,
   fn: (value: T) => R,
   ...reject: NoThenableReturn<R>
 ): Result<T, E>;
-export function inspect<T, E>(
+export function inspect<T, E = never>(
   result: PromiseLike<Result<T, E>>,
   fn: (value: T) => unknown,
 ): Promise<Result<T, E>>;
@@ -255,12 +255,12 @@ export function inspect(
  * by identity, not a copy. The mirror of {@link inspect}; the same widening note
  * applies to its arms.
  */
-export function inspectErr<T, E, R>(
+export function inspectErr<T, E = never, R = unknown>(
   result: Result<T, E>,
   fn: (error: E) => R,
   ...reject: NoThenableReturn<R>
 ): Result<T, E>;
-export function inspectErr<T, E>(
+export function inspectErr<T, E = never>(
   result: PromiseLike<Result<T, E>>,
   fn: (error: E) => unknown,
 ): Promise<Result<T, E>>;

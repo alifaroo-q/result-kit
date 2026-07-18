@@ -59,7 +59,7 @@ const UNWRAP_FAILED = 'unwrapOrThrow called on an Err';
  * `cases` object always supplies an `err`, so the default never fires on an
  * inferred call and cannot silently collapse the union.
  */
-export function match<T, E, UOk, UErr = UOk>(
+export function match<T, E = never, UOk = never, UErr = UOk>(
   result: Result<T, E>,
   cases: { ok: (value: T) => UOk; err: (error: E) => UErr },
 ): UOk | UErr {
@@ -83,7 +83,7 @@ export function unwrapOr<T, E>(result: Result<T, E>, defaultValue: T): T {
  * The lazy twin of {@link unwrapOr}: `fn` does not fire on the `Ok` branch, so
  * an expensive or side-effecting fallback costs nothing on the happy path.
  */
-export function unwrapOrElse<T, E>(result: Result<T, E>, fn: (error: E) => T): T {
+export function unwrapOrElse<T, E = never>(result: Result<T, E>, fn: (error: E) => T): T {
   return result.ok ? result.value : fn(result.error);
 }
 

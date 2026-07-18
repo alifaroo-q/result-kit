@@ -53,11 +53,11 @@ const RESUMED_AFTER_SHORT_CIRCUIT =
  * branch, read `.ok` as `undefined` and yielded the raw promise as a malformed
  * `Err`. Fixed in [#28]; pinned by a cross-realm regression test.
  */
-export function safeUnwrap<T, E>(result: Result<T, E>): Generator<Err<E>, T>;
-export function safeUnwrap<T, E>(
+export function safeUnwrap<T, E = never>(result: Result<T, E>): Generator<Err<E>, T>;
+export function safeUnwrap<T, E = never>(
   result: PromiseLike<Result<T, E>>,
 ): AsyncGenerator<Err<E>, T>;
-export function safeUnwrap<T, E>(
+export function safeUnwrap<T, E = never>(
   result: Result<T, E> | PromiseLike<Result<T, E>>,
 ): Generator<Err<E>, T> | AsyncGenerator<Err<E>, T> {
   if (isThenable(result)) {
