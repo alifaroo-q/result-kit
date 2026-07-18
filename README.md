@@ -1,15 +1,23 @@
 # @zireal/result-kit
 
-Type-safe result and structured error utilities for TypeScript, with optional NestJS adapters.
+Type-safe `Result` handling for TypeScript. Model failure as a value instead of throwing through your service layer.
 
-## Packages
+- **Plain data.** A `Result` is `{ ok: true, value }` or `{ ok: false, error }` — no class, no methods, no hidden brand. It survives `JSON.stringify` and crosses process boundaries intact.
+- **Zero dependencies.** No runtime dependencies, no peer dependencies.
+- **Two surfaces, one implementation.** A fluent wrapper for ergonomics, and a free-function core for bundle size. The wrapper delegates to the core; it is not a second codebase.
+- **Genuinely tree-shakable.** Import three functions and ship three functions. The fluent wrapper lives behind a separate entrypoint, so it costs nothing unless you import it.
 
-- `@zireal/result-kit`
-- `@zireal/result-kit/core`
-- `@zireal/result-kit/fp-ts`
-- `@zireal/result-kit/nest`
+```ts
+import { ok } from '@zireal/result-kit/fluent';
 
-The package root re-exports the framework-agnostic core only. Nest-specific helpers live in `@zireal/result-kit/nest`.
+const greeting = ok(user)
+  .map((u) => u.name)
+  .match({ ok: (name) => `Hello, ${name}`, err: () => 'Hello, stranger' });
+```
+
+> **Upgrading from 1.x?** See [`MIGRATION.md`](MIGRATION.md). It is a full rework — most names moved, and one of them (`unwrapOrThrow`) breaks *silently*.
+
+---
 
 ## Installation
 
@@ -17,193 +25,308 @@ The package root re-exports the framework-agnostic core only. Nest-specific help
 pnpm add @zireal/result-kit
 ```
 
-If you use the Nest adapter:
+| Requirement | Version |
+|---|---|
+| Node | `>=22.12` |
+| TypeScript | `>=6.0` |
+| Module format | **ESM only** — no CJS build |
 
-```bash
-pnpm add @nestjs/common
+`moduleResolution` must be `"bundler"`, `"node16"`, or `"nodenext"`. On CommonJS, load it with `require('@zireal/result-kit')` (Node 22.12+ supports requiring ESM) or `await import(...)`.
+
+---
+
+## The two surfaces
+
+Both are first-class and fully supported. Pick per project, or mix per file.
+
+| | `@zireal/result-kit/fluent` | `@zireal/result-kit` |
+|---|---|---|
+| Style | chained methods | free functions |
+| Reads like | `ok(x).map(f).unwrapOr(0)` | `unwrapOr(map(ok(x), f), 0)` |
+| Best for | application code, linear pipelines | libraries, hot paths, minimal bundles |
+| Bundle cost | the wrapper class | only the functions you import |
+
+**Start with `/fluent`.** It is the more comfortable surface and what most application code should use. Reach for the core when bundle size matters, or when you are writing a library and would rather not impose a wrapper on your callers.
+
+The core is **self-sufficient** — it never needs `/fluent`. That is the point of the split, and it is something a class-based library structurally cannot offer, because there the methods and the data are the same object.
+
+---
+
+## Quick start
+
+### The fluent surface
+
+```ts
+import { from } from '@zireal/result-kit/fluent';
+
+const label = from(findUser('u1'))
+  .map((user) => user.name)
+  .mapErr((e) => e.message)
+  .unwrapOr('anonymous');
 ```
 
-## Core Concepts
+`from(...)` lifts a plain `Result` into the wrapper; `.toResult()` takes you back out. **The plain union is the source of truth** — the wrapper is a transient envelope for the duration of a chain, not something to store or serialize.
+
+### The core surface
+
+The same thing, without the wrapper:
+
+```ts
+import { map, mapErr, unwrapOr } from '@zireal/result-kit';
+
+const named = map(findUser('u1'), (user) => user.name);
+const label = unwrapOr(mapErr(named, (e) => e.message), 'anonymous');
+```
+
+Read inside-out rather than left-to-right. If that nesting bothers you, that is exactly what `/fluent` and [`safeTry`](#do-notation) are for.
+
+### Producing a `Result`
+
+```ts
+import { ok, err } from '@zireal/result-kit';
+import type { Result } from '@zireal/result-kit';
+
+function findUser(id: string): Result<User, NotFound> {
+  const user = db.get(id);
+
+  return user ? ok(user) : err({ type: 'not_found', message: `No user ${id}` });
+}
+```
+
+### Async
+
+One `await` at the front, a terminal at the end, no ceremony in between:
+
+```ts
+import { ResultAsync } from '@zireal/result-kit/fluent';
+
+const name = await ResultAsync.from(loadUser(id))
+  .andThen(requireActive)
+  .map((user) => user.name)
+  .match({ ok: (n) => n, err: () => 'anonymous' });
+```
+
+`ResultAsync` implements `PromiseLike`, so `await resultAsync` gives you the plain `Result` — awaiting *is* the sanctioned way out. It also means a floating un-`await`ed chain is caught by the standard `no-floating-promises` lint rule, for free.
+
+In the core, async is just `Promise<Result<T, E>>`. There is no new type, and no `Async`-suffixed twin of anything — the transforms take a value or a promise in the same signature:
+
+```ts
+const upper = await map(loadUser(id), (user) => user.name.toUpperCase());
+```
+
+---
+
+## Core concepts
 
 ### `Result<T, E>`
 
 ```ts
-type Result<T, E> = Success<T> | Failure<E>;
+type Result<T, E> = Ok<T> | Err<E>;
+
+interface Ok<T>  { readonly ok: true;  readonly value: T }
+interface Err<E> { readonly ok: false; readonly error: E }
 ```
 
-Use `Result` to model success and failure explicitly rather than throwing through your service layer.
-
-### `TypedError`
+Purely structural — there is no brand. Any `{ ok: true, value }` **is** an `Ok<T>`, whoever built it. That is a deliberate guarantee rather than an accident: it is what lets a `Result` round-trip through JSON, cross an HTTP boundary, or come back from a worker and still be a `Result`.
 
 ```ts
-interface TypedError<TType extends string = string> {
-  type: TType;
-  message: string;
-  details?: Record<string, unknown>;
-  cause?: unknown;
+const parsed = JSON.parse(JSON.stringify(result)); // still a usable Result
+```
+
+Three caveats on that round-trip:
+
+- A `cause` may hold something non-serializable.
+- Exit the fluent wrapper first — serialize `chain.toResult()`, not the chain.
+- **`ok()` with no argument does not survive it.** The value is `{ ok: true, value: undefined }` — two fields, as always — but `JSON.stringify` omits an `undefined` property, so it round-trips to `{ ok: true }` and the `value` key is *gone*, not `undefined`. Code doing `'value' in parsed` will be surprised; `parsed.value` still reads `undefined` and is usually fine.
+
+### Narrowing
+
+`isOk` / `isErr` are type predicates, so the field access after them is checked:
+
+```ts
+import { isOk } from '@zireal/result-kit';
+
+if (isOk(result)) {
+  result.value;   // T
+} else {
+  result.error;   // E
 }
 ```
 
-`TypedError` is the package’s structured error convention. You can still use any `E` with `Result<T, E>`, but `TypedError` works well for application and domain failures.
+On the fluent side, `.isOk()` / `.isErr()` return **plain booleans** and buy you no narrowing — a method cannot emit a predicate about its own class's generics. Narrow with `.match()` or a terminal instead, or leave the wrapper with `.toResult()` first.
 
-## Core Usage
+---
+
+## API
+
+### Root — `@zireal/result-kit`
+
+**Constructors and guards**
+
+| | |
+|---|---|
+| `ok(value)` / `ok()` | Build an `Ok`. The no-arg form is for `Result<void, E>` |
+| `err(error)` | Build an `Err` |
+| `isOk(r)` / `isErr(r)` | Type-predicate guards |
+| `isTypedError(e)` | Whether a value follows the `TypedError` convention |
+| `defineError(type, message)` | Build a typed-error constructor — see [below](#structured-errors) |
+
+**Transforms** — each takes a `Result` *or* a `Promise<Result>`
+
+| | |
+|---|---|
+| `map(r, fn)` | Transform the value; pass `Err` through |
+| `mapErr(r, fn)` | Transform the error; pass `Ok` through |
+| `andThen(r, fn)` | Chain a fallible step; accumulates the error channel to `E \| F` |
+| `orElse(r, fn)` | Recover from an error |
+| `inspect(r, fn)` / `inspectErr(r, fn)` | Tee one side for a side effect; returns the input unchanged |
+
+**Terminals** — these leave the `Result` world
+
+| | |
+|---|---|
+| `match(r, { ok, err })` | Collapse both branches to one value. Exhaustive by construction |
+| `unwrapOr(r, default)` | The value, or a fallback |
+| `unwrapOrElse(r, fn)` | The value, or a fallback computed from the error |
+| `unwrapOrThrow(r, message?)` | The value, or **throw** a real `Error` with the original in `cause` |
+| `toNullable(r)` | The value, or `null` |
+
+**Collections**
+
+| | |
+|---|---|
+| `combine(results)` | All-or-nothing; preserves the tuple type. First `Err` wins |
+| `combineWithAllErrors(results)` | Same, but collects *every* error into an array |
+| `partition(results)` | Split into `[values, errors]` — both halves, always |
+
+**Interop**
+
+| | |
+|---|---|
+| `fromNullable(value, error)` | `null` / `undefined` becomes an `Err` |
+| `fromPredicate(value, pred, error)` | Narrows `T` when `pred` is a type guard |
+| `fromThrowable(fn, onThrow)` | Wrap a throwing function into a `Result`-returning one |
+| `fromPromise(promise, onReject)` | Catch a **rejection** into the error channel |
+| `fromThrowableAsync(fn, onReject)` | The lazy, reusable form of `fromPromise` |
+
+**Do-notation** — `safeTry`, `safeUnwrap`. See [below](#do-notation).
+
+**Types** — `Result` `Ok` `Err` `TypedError` `ErrorCtor` `OkTypeOf` `ErrTypeOf`
+
+### `/fluent` — `@zireal/result-kit/fluent`
+
+Exports `ok` `err` `from` `safeTry` `fromPromise` `fromThrowableAsync` `ResultAsync`, plus the `ResultChain` type.
+
+`ok` / `err` / `safeTry` / `fromPromise` / `fromThrowableAsync` exist at **both** entrypoints under the same names — the root's return plain data, these return wrappers. That is deliberate: you should not have to learn two vocabularies.
+
+**`ResultChain<T, E>`** mirrors the core one-to-one: `.map()` `.mapErr()` `.andThen()` `.orElse()` `.inspect()` `.inspectErr()` `.match()` `.unwrapOr()` `.unwrapOrElse()` `.unwrapOrThrow()` `.toNullable()` `.isOk()` `.isErr()` `.toResult()` `.toAsync()`.
+
+**`ResultAsync<T, E>`** is `ResultChain` lifted — every value-terminal returns a `Promise`. Two deliberate differences: there is no `.isOk()` / `.isErr()` (an always-truthy `if (ra.isOk())` is a footgun, and narrowing needs the plain union anyway), and `.toJSON()` **throws** rather than silently serializing `{}` for a value that has not arrived yet.
+
+**Array-shaped helpers stay root-only** — `combine`, `combineWithAllErrors`, `partition`, and the three sync constructors `fromNullable` / `fromPredicate` / `fromThrowable`. They take arrays or non-`Result` inputs, so there is no single instance for a method to hang off. Re-enter with `from(...)`:
 
 ```ts
-import {
-  ResultKit,
-  type Result,
-  type TypedErrorUnion,
-} from "@zireal/result-kit";
-
-type UserError = TypedErrorUnion<"not_found" | "validation_error">;
-
-const findUser = (id: string): Result<{ id: string }, UserError> => {
-  if (!id.trim()) {
-    return ResultKit.fail({
-      type: "validation_error",
-      message: "id is required",
-    });
-  }
-
-  if (id !== "123") {
-    return ResultKit.fail({
-      type: "not_found",
-      message: "User not found",
-      details: { id },
-    });
-  }
-
-  return ResultKit.success({ id });
-};
+from(combine([a, b])).map(sum).unwrapOr(0);
 ```
 
-Chain result-producing services fluently with pipeline helpers:
+**Crossing from sync to async is explicit**, via `.toAsync()`:
 
 ```ts
-type AuthError = TypedErrorUnion<"missing_token">;
-
-const requireSession = (
-  token: string,
-): Result<{ userId: string }, AuthError> => {
-  if (!token.trim()) {
-    return ResultKit.fail({
-      type: "missing_token",
-      message: "token is required",
-    });
-  }
-
-  return ResultKit.success({ userId: "123" });
-};
-
-const result = ResultKit.pipe("session-token")
-  .andThen(requireSession)
-  .andThen((session) => findUser(session.userId))
-  .map((user) => user.name)
-  .tap({
-    onSuccess: (name) => console.info("loaded user", name),
-  })
-  .match({
-    onSuccess: (name) => name,
-    onFailure: (error) => error.message,
-  });
-```
-
-Async pipelines accept both sync and async callbacks for fluent composition:
-
-```ts
-const displayName = await ResultKit.pipeAsync(Promise.resolve("session-token"))
-  .andThen(requireSession)
-  .andThen((session) => Promise.resolve(findUser(session.userId)))
-  .map((user) => user.name.toUpperCase())
-  .orElse((error) => Promise.resolve(ResultKit.success(error.message)))
-  .match({
-    onSuccess: (name) => name,
-    onFailure: (error) => error.message,
-  });
-```
-
-## `fp-ts` Interop
-
-Use the optional `@zireal/result-kit/fp-ts` entrypoint when you need to bridge into `Either` or `TaskEither` workflows without changing the main library API:
-
-```ts
-import { right } from "fp-ts/Either";
-import { fromEither, toEither, toTaskEither } from "@zireal/result-kit/fp-ts";
-
-const result = fromEither(right(42));
-const either = toEither(ResultKit.success(42));
-const taskEither = toTaskEither(Promise.resolve(ResultKit.success(42)));
-```
-
-## Nest Usage
-
-```ts
-import { Controller, Get, Param } from "@nestjs/common";
-import { unwrapOrThrow } from "@zireal/result-kit/nest";
-
-@Controller("users")
-export class UserController {
-  constructor(private readonly service: UserService) {}
-
-  @Get(":id")
-  async getUser(@Param("id") id: string) {
-    return unwrapOrThrow(await this.service.findUser(id));
-  }
-}
-```
-
-Use a mapper when your domain error types need custom HTTP status behavior:
-
-```ts
-import { BadRequestException, NotFoundException } from "@nestjs/common";
-import { unwrapOrThrow } from "@zireal/result-kit/nest";
-import { ResultKit } from "@zireal/result-kit";
-
-const user = unwrapOrThrow(result, {
-  mapError: (error) => {
-    if (!ResultKit.isTypedError(error)) return undefined;
-    if (error.type === "validation_error") {
-      return new BadRequestException(error.message);
-    }
-    if (error.type === "not_found") {
-      return new NotFoundException(error.message);
-    }
-
-    return undefined;
-  },
+ok(user).map(validate).toAsync().andThen(saveRemote).match({
+  ok: (saved) => saved.id,
+  err: (e) => e.message,
 });
 ```
 
-## API Surface
+It is explicit on purpose. A settled `Result` cannot promise an asynchronous output — a transform that short-circuits never runs its callback at all, so on the `Err` branch there would be nothing to await.
 
-### Core
+---
 
-- `TypedError`, `TypedErrorOf`, `TypedErrorUnion`
-- `Success`, `Failure`, `Result`
-- `ResultPipeline`, `AsyncResultPipeline`
-  with `andThen`, `map`, `mapError`, `tap`, `orElse`, `match`, `done`
-- `ResultKit.success`, `failure`, `fail`
-- `ResultKit.pipe`, `pipeAsync`
-- `ResultKit.isSuccess`, `isFailure`, `isTypedError`
-- `ResultKit.map`, `bimap`, `mapAsync`, `mapError`, `mapErrorAsync`
-- `ResultKit.andThen`, `andThenAsync`, `orElse`, `orElseAsync`
-- `ResultKit.match`, `matchAsync`, `tap`, `tapAsync`
-- `ResultKit.unwrap`, `unwrapSuccess`, `unwrapFailure`, `unwrapOr`, `unwrapOrElse`, `unwrapOrElseAsync`
-- `ResultKit.combine`, `combineAsync`, `combineWithAllErrors`, `combineWithAllErrorsAsync`
-- `ResultKit.fromNullable`, `fromPredicate`, `fromPromise`, `fromThrowable`, `fromThrowableAsync`
-- `ResultKit.partition`, `filterSuccesses`, `filterFailures`, `toNullable`, `flatten`
+## Do-notation
 
-### `fp-ts`
+For flows where chaining gets awkward — branches, early exits, or a step needing a value from two steps back. Any `Err` exits the whole block:
 
-- `toEither`, `fromEither`, `toTaskEither`, `fromTaskEither`
+```ts
+import { ok, safeTry, safeUnwrap } from '@zireal/result-kit';
 
-### Nest
+const total = safeTry(function* () {
+  const user = yield* safeUnwrap(findUser(id));      // an Err here short-circuits
+  const order = yield* safeUnwrap(loadOrder(user));  // each binds its own type
 
-- `toHttpException`
-- `unwrapOrThrow`
-- `unwrapPromise`
+  return ok(user.credit + order.total);              // return a Result explicitly
+});
+```
 
-## Examples
+The error channel accumulates — that block is `Result<number, NotFound | OrderMissing>`.
 
-- [`examples/core.ts`](./examples/core.ts)
-- [`examples/nest.ts`](./examples/nest.ts)
+It works with promises too. Inside an `async function*`, a `Promise<Result>` unwraps with no `await`:
+
+```ts
+const total = await safeTry(async function* () {
+  const user = yield* safeUnwrap(fetchUser(id));
+
+  return ok(user.credit);
+});
+```
+
+On `/fluent` there is **no `safeUnwrap`** — the wrappers are self-iterable, so you `yield*` them directly, and the block hands back a wrapper so the chain continues:
+
+```ts
+import { ok, safeTry, from } from '@zireal/result-kit/fluent';
+
+const total = safeTry(function* () {
+  const user = yield* from(findUser(id));
+
+  return ok(user.credit);
+}).unwrapOr(0);
+```
+
+---
+
+## Structured errors
+
+`E` is fully generic — a `Result`'s error can be a string, an `Error`, or anything else. `TypedError` is an **opt-in** convention for when you want errors you can narrow on:
+
+```ts
+import { defineError, err } from '@zireal/result-kit';
+
+const notFound = defineError('not_found', (d: { id: string }) => `No user ${d.id}`);
+const forbidden = defineError('forbidden', 'Not permitted');
+
+type AppError = ReturnType<typeof notFound> | ReturnType<typeof forbidden>;
+
+const failure = err(notFound({ id: 'u1' }));
+//    ^? Err<TypedError<'not_found', { id: string }>>
+```
+
+The values are plain objects — `{ type, message, details?, cause? }` — never classes, never `extends Error`. They serialize, and they narrow:
+
+```ts
+switch (error.type) {
+  case 'not_found': return error.details?.id;
+  case 'forbidden': return null;
+}
+```
+
+Each constructor also carries `.type`, readable without building a value, and a `.is()` guard for narrowing a union at runtime.
+
+---
+
+## Tree-shaking
+
+The root entrypoint is a flat barrel of standalone functions and the package is marked `sideEffects: false`. Import `map` and you ship `map`.
+
+The fluent wrapper lives behind `/fluent` and is **never** reachable from the root bundle. That boundary is enforced by an automated test which inspects the built output — not by convention, and not by review. If you never import `/fluent`, no wrapper code reaches your bundle.
+
+---
+
+## Documentation
+
+- [`MIGRATION.md`](MIGRATION.md) — upgrading from 1.x.
+- [`CHANGELOG.md`](CHANGELOG.md) — release history.
+- [`CONTEXT.md`](CONTEXT.md) — the project's vocabulary.
+- [`docs/adr/`](docs/adr/) — the design decisions, and why they went the way they did.
+
+## License
+
+MIT © Ali Farooq

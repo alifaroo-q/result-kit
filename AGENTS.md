@@ -7,9 +7,10 @@
 > It ships to npm as **`5.0.0`**. Contributor-facing docs may say "v2" (the internal
 > codename); consumer-facing docs say `5.0.0` only, and never mention "v2".
 >
-> [README.md](README.md) still documents the **v1** API and is rewritten in
-> [#31](https://github.com/alifarooq-zk/result-kit/issues/31) — do not treat it as the
-> current surface. [CONTEXT.md](CONTEXT.md) is current.
+> [README.md](README.md), [MIGRATION.md](MIGRATION.md) and [CONTEXT.md](CONTEXT.md) all
+> document the **current** 5.0.0 surface ([#31](https://github.com/alifarooq-zk/result-kit/issues/31)).
+> `README.md` and `MIGRATION.md` are the two consumer-facing files — they say `5.0.0` and
+> never "v2"; this file and `CONTEXT.md` are contributor-facing and may use the codename.
 
 ## Overview
 
@@ -65,6 +66,7 @@
 
 ## Documentation
 
-- Link to [README.md](README.md) for installation, API surface, and usage guidance instead of duplicating large sections here — but note it is **v1-era until [#31](https://github.com/alifarooq-zk/result-kit/issues/31) rewrites it**.
+- Link to [README.md](README.md) for installation, API surface, and usage guidance instead of duplicating large sections here. It documents the shipped 5.0.0 surface, with `/fluent` as the hero and the free-function core as the supported lean path (spec §4) — keep that positioning if you edit it.
+- [MIGRATION.md](MIGRATION.md) lives at the **repo root**, not `docs/` — it is the one consumer-facing migration document, and its rename table *is* the migration tool, since no codemod ships. It carries the mandatory `unwrapOrThrow` collision warning (spec §8.5); do not remove or soften it.
 - [CONTEXT.md](CONTEXT.md) carries the current domain vocabulary and is the fastest way to get the v5 terminology right.
-- The `examples/` directory was removed in the teardown (both files imported the deleted v1 API). [#31](https://github.com/alifarooq-zk/result-kit/issues/31) authors the new `examples/core.ts` and must re-add `"examples"` to [tsconfig.json](tsconfig.json)'s `include`.
+- [examples/core.ts](examples/core.ts) is type-checked by `pnpm check` — `"examples"` is in [tsconfig.json](tsconfig.json)'s `include`, and it must stay there. Without it the example compiles for nobody and drifts silently while every command still reports green. It imports through the **bare specifiers** a consumer uses, which the `paths` entries map to `src/`; drop those and TypeScript self-resolves the package name to `dist/` instead, so a stale build would be what got checked.

@@ -63,9 +63,17 @@ export function err<E>(error: E): ResultChain<never, E> {
  * Re-enters fluent-land from a plain {@link Result}.
  *
  * The way back in from everything the wrapper deliberately does not mirror —
- * `combine`, `partition`, the `from*` constructors — all of which stay
- * free-function-only because they operate on arrays and non-`Result` inputs
- * rather than a single instance (spec §6).
+ * `combine`, `combineWithAllErrors`, `partition`, and the three *sync*
+ * constructors `fromNullable` / `fromPredicate` / `fromThrowable` — all of which
+ * stay root-only because they operate on arrays and non-`Result` inputs rather
+ * than a single instance (spec §6).
+ *
+ * **Not `from*` as a class.** `fromPromise` and `fromThrowableAsync` are
+ * exported from *this* module (§6.3, as amended by §10.5) — an earlier version
+ * of this note said "the `from*` constructors" and was wrong, which matters
+ * because the correction is the whole point of §10.5: without them a `/fluent`
+ * user entering from a throwing promise would have to import from root, the
+ * cross-entrypoint dependency ADR 0005 §4 rejected.
  *
  * ```ts
  * from(combine([a, b])).map(sum).unwrapOr(0);
