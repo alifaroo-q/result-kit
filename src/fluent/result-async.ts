@@ -63,9 +63,15 @@ export class ResultAsync<T, E> implements PromiseLike<Result<T, E>> {
    * argument of §10.5: this takes a promise that has already entered the result
    * world, while `fromPromise` catches a **rejection** off a raw `Promise<T>`.
    * Neither substitutes for the other.
+   *
+   * Accepts `PromiseLike`, not `Promise` (§10.9), and this one was pointed
+   * directly at itself: `ResultAsync` *implements* `PromiseLike`, so the narrower
+   * parameter rejected the class's own instances — `ResultAsync.from(ra)` failed
+   * to compile while working perfectly at runtime. `Promise.resolve` normalizes
+   * at the boundary, exactly as the transforms do.
    */
-  static from<T, E>(promise: Promise<Result<T, E>>): ResultAsync<T, E> {
-    return new ResultAsync(promise);
+  static from<T, E>(promise: PromiseLike<Result<T, E>>): ResultAsync<T, E> {
+    return new ResultAsync(Promise.resolve(promise));
   }
 
   /**
@@ -119,14 +125,14 @@ export class ResultAsync<T, E> implements PromiseLike<Result<T, E>> {
   }
 
   /** Tees the value of an `Ok` for a side effect, returning it unchanged. */
-  inspect(fn: (value: T) => void | Promise<void>): ResultAsync<T, E> {
+  inspect(fn: (value: T) => unknown): ResultAsync<T, E> {
     return ResultAsync.from(
       coreInspect(this.#promise, fn) as Promise<Result<T, E>>,
     );
   }
 
   /** Tees the error of an `Err` for a side effect, returning it unchanged. */
-  inspectErr(fn: (error: E) => void | Promise<void>): ResultAsync<T, E> {
+  inspectErr(fn: (error: E) => unknown): ResultAsync<T, E> {
     return ResultAsync.from(
       coreInspectErr(this.#promise, fn) as Promise<Result<T, E>>,
     );

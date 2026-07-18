@@ -1,6 +1,7 @@
 import { err, ok } from './result';
 import type { Result } from './result';
 import { isThenable } from './thenable';
+import type { NoThenableReturn } from './thenable';
 
 /**
  * Every transform below shares one overload pattern, and its **arm order is
@@ -23,6 +24,15 @@ import { isThenable } from './thenable';
  * `PromiseLike<U>` — so each call falls through to exactly the right arm. The
  * signatures §5.2 specifies are unchanged; only their order is.
  *
+ * **That exclusivity claim held for purely-sync and purely-async callbacks, and
+ * for nothing in between** (spec §10.7). A callback returning `U | Promise<U>`
+ * is neither: it fell through to the *sync* arm with `U` = the whole union, so
+ * tsc promised a settled `Result` while `isThenable` — broader than TypeScript's
+ * notion of awaitable — sent it down the async path and returned a `Promise`.
+ * The four transforms whose sync arm does not already demand a `Result` now
+ * reject that union via `NoThenableReturn`; `andThen` and `orElse` always did,
+ * for free. The rest parameter is load-bearing — see the note on the type.
+ *
  * Neither failure raises at runtime. `test/core/transforms.spec.ts` pins every
  * arm, and `pnpm check` is the only thing that runs those assertions.
  */
@@ -35,11 +45,8 @@ import { isThenable } from './thenable';
  */
 export function map<T, U, E>(
   result: Result<T, E>,
-  fn: (value: T) => PromiseLike<U>,
-): Promise<Result<U, E>>;
-export function map<T, U, E>(
-  result: Result<T, E>,
   fn: (value: T) => U,
+  ...reject: NoThenableReturn<U>
 ): Result<U, E>;
 export function map<T, U, E>(
   result: PromiseLike<Result<T, E>>,
@@ -48,7 +55,7 @@ export function map<T, U, E>(
 export function map<T, U, E>(
   result: PromiseLike<Result<T, E>>,
   fn: (value: T) => U,
-): Promise<Result<U, E>>;
+): Promise<Result<Awaited<U>, E>>;
 
 /**
  * The promise-input arm is split in two rather than written as §5.2's single
@@ -86,11 +93,8 @@ export function map(
  */
 export function mapErr<T, E, F>(
   result: Result<T, E>,
-  fn: (error: E) => PromiseLike<F>,
-): Promise<Result<T, F>>;
-export function mapErr<T, E, F>(
-  result: Result<T, E>,
   fn: (error: E) => F,
+  ...reject: NoThenableReturn<F>
 ): Result<T, F>;
 export function mapErr<T, E, F>(
   result: PromiseLike<Result<T, E>>,
@@ -99,7 +103,7 @@ export function mapErr<T, E, F>(
 export function mapErr<T, E, F>(
   result: PromiseLike<Result<T, E>>,
   fn: (error: E) => F,
-): Promise<Result<T, F>>;
+): Promise<Result<T, Awaited<F>>>;
 export function mapErr(
   result: Result<unknown, unknown> | PromiseLike<Result<unknown, unknown>>,
   fn: (error: unknown) => unknown,
@@ -129,10 +133,6 @@ export function mapErr(
  * union is invisible until a consumer handles an error the types said could not
  * occur.
  */
-export function andThen<T, U, E, F>(
-  result: Result<T, E>,
-  fn: (value: T) => PromiseLike<Result<U, F>>,
-): Promise<Result<U, E | F>>;
 export function andThen<T, U, E, F>(
   result: Result<T, E>,
   fn: (value: T) => Result<U, F>,
@@ -173,10 +173,6 @@ export function andThen(
  */
 export function orElse<T, E, U, F>(
   result: Result<T, E>,
-  fn: (error: E) => PromiseLike<Result<U, F>>,
-): Promise<Result<T | U, F>>;
-export function orElse<T, E, U, F>(
-  result: Result<T, E>,
   fn: (error: E) => Result<U, F>,
 ): Result<T | U, F>;
 export function orElse<T, E, U, F>(
@@ -210,13 +206,10 @@ export function orElse(
  * Tees a side effect off the `Ok` branch and returns the result **unchanged** —
  * by identity, not a copy.
  */
-export function inspect<T, E>(
+export function inspect<T, E, R>(
   result: Result<T, E>,
-  fn: (value: T) => PromiseLike<unknown>,
-): Promise<Result<T, E>>;
-export function inspect<T, E>(
-  result: Result<T, E>,
-  fn: (value: T) => void,
+  fn: (value: T) => R,
+  ...reject: NoThenableReturn<R>
 ): Result<T, E>;
 export function inspect<T, E>(
   result: PromiseLike<Result<T, E>>,
@@ -262,13 +255,10 @@ export function inspect(
  * by identity, not a copy. The mirror of {@link inspect}; the same widening note
  * applies to its arms.
  */
-export function inspectErr<T, E>(
+export function inspectErr<T, E, R>(
   result: Result<T, E>,
-  fn: (error: E) => PromiseLike<unknown>,
-): Promise<Result<T, E>>;
-export function inspectErr<T, E>(
-  result: Result<T, E>,
-  fn: (error: E) => void,
+  fn: (error: E) => R,
+  ...reject: NoThenableReturn<R>
 ): Result<T, E>;
 export function inspectErr<T, E>(
   result: PromiseLike<Result<T, E>>,

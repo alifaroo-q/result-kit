@@ -93,7 +93,7 @@ export function from<T, E>(result: Result<T, E>): ResultChain<T, E> {
  * §4 wins; §6.3 is amended to seven values.
  */
 export function fromPromise<T, E>(
-  promise: Promise<T>,
+  promise: PromiseLike<T>,
   onReject: (error: unknown) => E,
 ): ResultAsync<T, E> {
   return ResultAsync.from(coreFromPromise(promise, onReject));
