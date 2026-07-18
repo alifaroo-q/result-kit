@@ -8,7 +8,7 @@
 > codename); consumer-facing docs say `5.0.0` only, and never mention "v2".
 >
 > [README.md](README.md), [MIGRATION.md](MIGRATION.md) and [CONTEXT.md](CONTEXT.md) all
-> document the **current** 5.0.0 surface ([#31](https://github.com/alifarooq-zk/result-kit/issues/31)).
+> document the **current** 5.0.0 surface ([#31](https://github.com/alifaroo-q/result-kit/issues/31)).
 > `README.md` and `MIGRATION.md` are the two consumer-facing files — they say `5.0.0` and
 > never "v2"; this file and `CONTEXT.md` are contributor-facing and may use the codename.
 
@@ -34,7 +34,7 @@
 - [src/index.ts](src/index.ts) is the flat root barrel, and the only public entrypoint today.
 - [src/core/result.ts](src/core/result.ts) holds the `Result` union (`Ok<T> | Err<E>`) plus `ok` / `err` / `isOk` / `isErr`.
 - Sibling modules, one per spec group, are all shipped: `transforms.ts` (§5.2), `terminals.ts` (§5.3), `collections.ts` (§5.4), `interop.ts` (§5.5 + §5.6), `error.ts` (§3), `format.ts` (§3.4), `do-notation.ts` (§5.7).
-- The `./fluent` entrypoint (`ResultChain` / `ResultAsync`) arrives in [#28](https://github.com/alifarooq-zk/result-kit/issues/28). The root `.` bundle must **never** contain the fluent wrapper — spec §7.3 mandates an automated guard.
+- The `./fluent` entrypoint (`ResultChain` / `ResultAsync`) arrives in [#28](https://github.com/alifaroo-q/result-kit/issues/28). The root `.` bundle must **never** contain the fluent wrapper — spec §7.3 mandates an automated guard.
 - If you add a new public entrypoint, update [tsdown.config.ts](tsdown.config.ts) and the `package.json` `exports` map together.
 - **`exports` is hand-authored, not generated** (`exports: false` in [tsdown.config.ts](tsdown.config.ts)). tsdown's generator collapses `"."` to a bare string, losing spec §7.2's mandated types-first branch, and offers no way to keep `module` without also emitting `main` — which §7.2 forbids, because a `main` invites a tool to `require()` an ESM file as CJS. `publint` and `attw` still validate the hand-written result on every build.
 
@@ -54,7 +54,7 @@
 
 ## Release Guidance
 
-- **During the v5 rework, add no changesets.** Spec §8.2 knowingly overrides the rule below, for the `5.0.0` release only: `package.json` still declares the burned `1.2.0`, so a `major` changeset would compute `2.0.0` and `changeset publish` would fail (observed: **E400** *Cannot publish over previously published version*, not the 403 the spec first predicted). [#32](https://github.com/alifarooq-zk/result-kit/issues/32) hand-sets `5.0.0` and hand-writes the changelog entry. Resume the normal flow below from `5.0.1` / `5.1.0` onward.
+- **During the v5 rework, add no changesets.** Spec §8.2 knowingly overrides the rule below, for the `5.0.0` release only: `package.json` still declares the burned `1.2.0`, so a `major` changeset would compute `2.0.0` and `changeset publish` would fail (observed: **E400** *Cannot publish over previously published version*, not the 403 the spec first predicted). [#32](https://github.com/alifaroo-q/result-kit/issues/32) hand-sets `5.0.0` and hand-writes the changelog entry. Resume the normal flow below from `5.0.1` / `5.1.0` onward.
 - For any consumer-facing bug fix, feature, or breaking change, add a changeset before finishing the work.
 - Use `pnpm changeset` to create the changeset file.
 - Choose the version bump based on impact:

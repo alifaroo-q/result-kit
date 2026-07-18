@@ -3,15 +3,15 @@
 - **Status:** Accepted
 - **Date:** 2026-07-18
 - **Deciders:** Ali Farooq
-- **Ticket:** [Formatter helpers for accumulated TypedError[] (post-v2)](https://github.com/alifarooq-zk/result-kit/issues/18)
-- **Map:** [Map: @zireal/result-kit v2 — lean, dependency-free core rework](https://github.com/alifarooq-zk/result-kit/issues/8) (complete)
+- **Ticket:** [Formatter helpers for accumulated TypedError[] (post-v2)](https://github.com/alifaroo-q/result-kit/issues/18)
+- **Map:** [Map: @zireal/result-kit v2 — lean, dependency-free core rework](https://github.com/alifaroo-q/result-kit/issues/8) (complete)
 - **Builds on:** [ADR 0001 — v2 core API paradigm](./0001-v2-core-api-paradigm.md), [ADR 0002 — v2 TypedError model](./0002-v2-typederror-model.md), [ADR 0004 — v2 full API surface / method inventory](./0004-v2-api-surface-method-inventory.md)
 - **Amends:** [ADR 0004 §4](./0004-v2-api-surface-method-inventory.md) — which **rejected** these helpers and deferred them past the rework. This ADR reverses that deferral. It does not reverse ADR 0002.
 - **Evidence:** [`docs/research/api-packaging-landscape.md`](../research/api-packaging-landscape.md); zod's current formatter surface, read from [zod.dev/error-formatting](https://zod.dev/error-formatting) and [zod.dev/v4/changelog](https://zod.dev/v4/changelog) rather than from recollection.
 
 ## Context
 
-`combineWithAllErrors` yields a flat `TypedError[]` — the `ZodError.issues[]` analog, and the whole of the accumulation story (spec §5.4). ADR 0004 §4 declined to ship presentation helpers over it: net-new surface against a "lean-down, not feature-expansion" destination, v1 had none, and formatting an array is a userland `.map()`. It was deferred to [#18](https://github.com/alifarooq-zk/result-kit/issues/18) as a post-release additive minor.
+`combineWithAllErrors` yields a flat `TypedError[]` — the `ZodError.issues[]` analog, and the whole of the accumulation story (spec §5.4). ADR 0004 §4 declined to ship presentation helpers over it: net-new surface against a "lean-down, not feature-expansion" destination, v1 had none, and formatting an array is a userland `.map()`. It was deferred to [#18](https://github.com/alifaroo-q/result-kit/issues/18) as a post-release additive minor.
 
 **This ADR ships them in `5.0.0` instead**, at the maintainer's direction, before the release rather than after it. Two consequences follow, and only the second is a cost:
 

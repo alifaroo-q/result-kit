@@ -4,7 +4,7 @@
 - **Date:** 2026-07-15
 - **Deciders:** Ali Farooq
 - **Ticket:** none — surfaced while consolidating [`docs/spec/v5-core-spec.md`](../spec/v5-core-spec.md), after the map's final ticket closed. See Context.
-- **Map:** [Map: @zireal/result-kit v2 — lean, dependency-free core rework](https://github.com/alifarooq-zk/result-kit/issues/8) (complete)
+- **Map:** [Map: @zireal/result-kit v2 — lean, dependency-free core rework](https://github.com/alifaroo-q/result-kit/issues/8) (complete)
 - **Builds on:** [ADR 0001 — v2 core API paradigm](./0001-v2-core-api-paradigm.md), [ADR 0004 — v2 full API surface / method inventory](./0004-v2-api-surface-method-inventory.md), [ADR 0005 — v2 async strategy](./0005-v2-async-strategy.md), [ADR 0007 — v2 do-notation helper](./0007-v2-do-notation-helper.md)
 - **Evidence:** [`docs/research/api-packaging-landscape.md`](../research/api-packaging-landscape.md), v1's own [`src/core/pipeline.ts`](../../src/core/pipeline.ts) + [`README.md`](../../README.md)
 
@@ -148,5 +148,5 @@ Iterability on the wrapper does not touch [ADR 0003](./0003-v2-result-type-shape
 - **ADR 0005's three safety properties are unaffected.** Lossless `await`-collapse, never-forced-through-the-thenable, and floating-caught-by-`no-floating-promises` all still hold: terminals are additive, and none of them touches `then`.
 - **`/fluent`'s export list is unchanged** — `ResultAsync` was already exported as a value for its `static from`. §5 confirms `safeUnwrap` stays out of `/fluent`, as ADR 0007 §3 says.
 - **Two new test obligations** for the execution effort, beyond the spec's existing list: `toJSON()` throws with an actionable message, and `yield* resultAsync` works inside a `/fluent` async `safeTry`.
-- **The map ([#8](https://github.com/alifarooq-zk/result-kit/issues/8)) declared the fog fully cleared, and it was not.** This is the second decision found after the map closed (the first — naming the fluent wrapper `ResultChain` — is recorded in [spec §10.1](../spec/v5-core-spec.md)). Both were surfaced by consolidating the ADRs into a single spec, which is exactly the pressure that finds gaps eight separate documents hide. Neither invalidates any prior ADR.
+- **The map ([#8](https://github.com/alifaroo-q/result-kit/issues/8)) declared the fog fully cleared, and it was not.** This is the second decision found after the map closed (the first — naming the fluent wrapper `ResultChain` — is recorded in [spec §10.1](../spec/v5-core-spec.md)). Both were surfaced by consolidating the ADRs into a single spec, which is exactly the pressure that finds gaps eight separate documents hide. Neither invalidates any prior ADR.
 - **Planning only** — implementation is the separate execution effort.

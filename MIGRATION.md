@@ -323,4 +323,4 @@ Most of this has no v1 equivalent, so it is not a rename — and several items a
 
 - [`README.md`](README.md) — the 5.0.0 API surface and usage.
 - [`CHANGELOG.md`](CHANGELOG.md) — release history. The `5.0.0` entry explains why the version jumps from 1.x straight to 5: `2.0.0`–`4.0.0` were published briefly and unpublished, and npm retires a version number permanently, so `5.0.0` is the only release above every stale `^2` / `^3` / `^4` range.
-- [Issues](https://github.com/alifarooq-zk/result-kit/issues) — if a rename in this table turns out to be wrong or incomplete, that is a bug in the migration tool. Please report it.
+- [Issues](https://github.com/alifaroo-q/result-kit/issues) — if a rename in this table turns out to be wrong or incomplete, that is a bug in the migration tool. Please report it.

@@ -1,8 +1,8 @@
 # Research: how high-authority libraries structure API, packaging & ergonomics
 
 > Landscape study for `@zireal/result-kit` **v2** — the lean, zero-dependency rework.
-> Resolves the research ticket *"how high-authority libraries structure API, packaging & ergonomics (Result genre + broader)"* ([#9](https://github.com/alifarooq-zk/result-kit/issues/9)).
-> Feeds the paradigm decision ([#10](https://github.com/alifarooq-zk/result-kit/issues/10)) and the TypedError decision ([#11](https://github.com/alifarooq-zk/result-kit/issues/11)).
+> Resolves the research ticket *"how high-authority libraries structure API, packaging & ergonomics (Result genre + broader)"* ([#9](https://github.com/alifaroo-q/result-kit/issues/9)).
+> Feeds the paradigm decision ([#10](https://github.com/alifaroo-q/result-kit/issues/10)) and the TypedError decision ([#11](https://github.com/alifaroo-q/result-kit/issues/11)).
 
 Two levels were studied against **real source** (published tarballs, `package.json` `exports`, type defs), not READMEs: the direct `Result`/`Either` genre, and broader high-authority libraries whose API/packaging decisions transfer.
 

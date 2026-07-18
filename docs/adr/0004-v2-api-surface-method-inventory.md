@@ -3,8 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-07-14
 - **Deciders:** Ali Farooq
-- **Ticket:** [Decide: the v2 full API surface / method inventory](https://github.com/alifarooq-zk/result-kit/issues/13)
-- **Map:** [Map: @zireal/result-kit v2 — lean, dependency-free core rework](https://github.com/alifarooq-zk/result-kit/issues/8)
+- **Ticket:** [Decide: the v2 full API surface / method inventory](https://github.com/alifaroo-q/result-kit/issues/13)
+- **Map:** [Map: @zireal/result-kit v2 — lean, dependency-free core rework](https://github.com/alifaroo-q/result-kit/issues/8)
 - **Builds on:** [ADR 0001 — v2 core API paradigm](./0001-v2-core-api-paradigm.md), [ADR 0002 — v2 TypedError model](./0002-v2-typederror-model.md), [ADR 0003 — v2 Result type shape](./0003-v2-result-type-shape.md)
 - **Evidence:** [`docs/research/api-packaging-landscape.md`](../research/api-packaging-landscape.md)
 
@@ -16,7 +16,7 @@ v1's baseline is a **static `ResultKit` toolbox of 47 method definitions** (cons
 
 ### Scope seam — sync inventory here, async model in #14
 
-This ADR locks the complete **synchronous** inventory and both surfaces' signatures. It records exactly one async ruling — **the v1 `xAsync` doubles are cut** (`mapAsync`, `mapErrorAsync`, `andThenAsync`, `orElseAsync`, `matchAsync`, `unwrapOrElseAsync`, `tapAsync`, `combineAsync`, `combineWithAllErrorsAsync`, `fromThrowableAsync`) — and hands the **positive async model** (how async is expressed instead, and the fate of `fromPromise`) to the async-strategy ticket ([#14](https://github.com/alifarooq-zk/result-kit/issues/14)). Package layout (root vs `/fluent` entrypoints) is [#15](https://github.com/alifarooq-zk/result-kit/issues/15); the `?`/do-notation helper is [#16](https://github.com/alifarooq-zk/result-kit/issues/16). None of those are decided here.
+This ADR locks the complete **synchronous** inventory and both surfaces' signatures. It records exactly one async ruling — **the v1 `xAsync` doubles are cut** (`mapAsync`, `mapErrorAsync`, `andThenAsync`, `orElseAsync`, `matchAsync`, `unwrapOrElseAsync`, `tapAsync`, `combineAsync`, `combineWithAllErrorsAsync`, `fromThrowableAsync`) — and hands the **positive async model** (how async is expressed instead, and the fate of `fromPromise`) to the async-strategy ticket ([#14](https://github.com/alifaroo-q/result-kit/issues/14)). Package layout (root vs `/fluent` entrypoints) is [#15](https://github.com/alifaroo-q/result-kit/issues/15); the `?`/do-notation helper is [#16](https://github.com/alifaroo-q/result-kit/issues/16). None of those are decided here.
 
 ## Decision
 
@@ -140,14 +140,14 @@ The wrapper mirrors only the functions that operate on a **single Result instanc
 - **Homogeneous-array-only `combine`.** Matches v1 — but collapses heterogeneous tuples to a union array, discarding per-position types. Rejected — tuple-preserving + error-union.
 - **Drop `partition` too (maximally lean).** Considered — but `partition` is best-effort (always returns the successes that worked *plus* the failures), a batch-processing capability the all-or-nothing combinators can't express and that is fiddly to hand-roll. Kept `partition`; cut only the two single-side filters.
 - **Eager `fromThrowable(() => …)`.** One-shot ergonomics — but the lazy form is strictly more flexible (reusable wrapped fn *and* one-shot via a thunk), preserves the arg list, and matches neverthrow + v1. Rejected — lazy.
-- **Ship formatter helpers for accumulated errors (`format`/`flatten`).** Zod-style presentation — but net-new surface against the "lean-down, not feature-expansion" destination; v1 has none, and formatting `TypedError[]` is a userland `.map()`. Rejected for v2, moved to the **post-v2 backlog** ([#18](https://github.com/alifarooq-zk/result-kit/issues/18)).
+- **Ship formatter helpers for accumulated errors (`format`/`flatten`).** Zod-style presentation — but net-new surface against the "lean-down, not feature-expansion" destination; v1 has none, and formatting `TypedError[]` is a userland `.map()`. Rejected for v2, moved to the **post-v2 backlog** ([#18](https://github.com/alifaroo-q/result-kit/issues/18)).
 - **Wrapper mirrors `combine` / `from*` / `isTypedError`.** Symmetry — but those operate on arrays / non-Result inputs, not a single instance; keeping them free-function-only avoids a confused wrapper surface. Rejected — free-function-only, re-enter via `from(...)`.
 - **No wrapper `toJSON()` (rely on the `.toResult()`-first rule alone).** Thinnest wrapper — but leaves an accidental `JSON.stringify(wrapper)` broken. Rejected — add the `toJSON()` safety net (§2).
 
 ## Consequences
 
-- **The full v1 → v2 method map is now known** — this unblocks the migration & breaking-change story, graduated from map fog into its own ticket ([#19](https://github.com/alifarooq-zk/result-kit/issues/19)), gated on the remaining design tickets ([#14](https://github.com/alifarooq-zk/result-kit/issues/14) / [#15](https://github.com/alifarooq-zk/result-kit/issues/15) / [#16](https://github.com/alifarooq-zk/result-kit/issues/16)).
-- **[#14](https://github.com/alifarooq-zk/result-kit/issues/14) (async), [#15](https://github.com/alifarooq-zk/result-kit/issues/15) (package layout), [#16](https://github.com/alifarooq-zk/result-kit/issues/16) (do-notation) are unblocked** — #13 was their blocker. Async inherits the "`xAsync` doubles cut" ruling and owns `fromPromise` + the positive async model. Package layout consumes the root-vs-`/fluent` split. Do-notation layers over the locked core.
-- **The #11-deferred accumulation story is fully resolved:** accumulation ships via `combineWithAllErrors` (flat `TypedError[]` = the `issues[]` analog); formatters do **not** ship in v2 core (backlog [#18](https://github.com/alifarooq-zk/result-kit/issues/18)).
+- **The full v1 → v2 method map is now known** — this unblocks the migration & breaking-change story, graduated from map fog into its own ticket ([#19](https://github.com/alifaroo-q/result-kit/issues/19)), gated on the remaining design tickets ([#14](https://github.com/alifaroo-q/result-kit/issues/14) / [#15](https://github.com/alifaroo-q/result-kit/issues/15) / [#16](https://github.com/alifaroo-q/result-kit/issues/16)).
+- **[#14](https://github.com/alifaroo-q/result-kit/issues/14) (async), [#15](https://github.com/alifaroo-q/result-kit/issues/15) (package layout), [#16](https://github.com/alifaroo-q/result-kit/issues/16) (do-notation) are unblocked** — #13 was their blocker. Async inherits the "`xAsync` doubles cut" ruling and owns `fromPromise` + the positive async model. Package layout consumes the root-vs-`/fluent` split. Do-notation layers over the locked core.
+- **The #11-deferred accumulation story is fully resolved:** accumulation ships via `combineWithAllErrors` (flat `TypedError[]` = the `issues[]` analog); formatters do **not** ship in v2 core (backlog [#18](https://github.com/alifaroo-q/result-kit/issues/18)).
 - **Net surface vs v1:** 10 methods cut, 1 rename (`mapError` → `mapErr`), 1 key-rename (`match`), 5 net-new members, plus all `xAsync` doubles removed pending #14 — a materially leaner core.
 - Implementation (writing the free functions, the delegating wrapper, and removing the static `ResultKit` toolbox + fp-ts pipeline) happens in the **separate execution effort**, not now (map is planning-only). `OkTypeOf` / `ErrTypeOf` are helper type aliases the execution effort defines.

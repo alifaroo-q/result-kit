@@ -4,17 +4,17 @@
 
 **Goal:** Port the locked `defineError` prototype into the package as `src/core/error.ts`, add the `isTypedError` base guard, and delete the prototype — so a consumer declares an error variant once and gets a constructor producing plain, serializable `TypedError` values with a typed `details` payload.
 
-**Architecture:** `TypedError` is an **opt-in convention**, never mandated by the error channel — `E` in `Result<T, E>` stays fully generic and `err("not found")` / `err(new DomainError())` remain first-class. The signature is already locked by [ADR 0002 §4](../adr/0002-v2-typederror-model.md) and the [`prototype/define-error/`](../../prototype/define-error/README.md) battery ([#17](https://github.com/alifarooq-zk/result-kit/issues/17)), so this ticket is a **port, not a design**. The one thing it must genuinely decide is the runtime payload disambiguation, which the prototype explicitly punted on — see *The one real decision* below.
+**Architecture:** `TypedError` is an **opt-in convention**, never mandated by the error channel — `E` in `Result<T, E>` stays fully generic and `err("not found")` / `err(new DomainError())` remain first-class. The signature is already locked by [ADR 0002 §4](../adr/0002-v2-typederror-model.md) and the [`prototype/define-error/`](../../prototype/define-error/README.md) battery ([#17](https://github.com/alifaroo-q/result-kit/issues/17)), so this ticket is a **port, not a design**. The one thing it must genuinely decide is the runtime payload disambiguation, which the prototype explicitly punted on — see *The one real decision* below.
 
-**Tech Stack:** TypeScript 7.0.2 (or 6.0.3 if [#21](https://github.com/alifarooq-zk/result-kit/issues/21) fell back) · Vitest 3.2.4 · tsdown · pnpm 11.9 · Node 24.17
+**Tech Stack:** TypeScript 7.0.2 (or 6.0.3 if [#21](https://github.com/alifaroo-q/result-kit/issues/21) fell back) · Vitest 3.2.4 · tsdown · pnpm 11.9 · Node 24.17
 
-**Ticket:** [#22](https://github.com/alifarooq-zk/result-kit/issues/22) · **Spec:** [`docs/spec/v5-core-spec.md`](../spec/v5-core-spec.md) §3, §3.1, §3.2, §3.3, §5.1, §10.3 · **Decision:** [ADR 0002](../adr/0002-v2-typederror-model.md) · **Prototype:** [`prototype/define-error/`](../../prototype/define-error/README.md) · **Blocked by:** [#21](https://github.com/alifarooq-zk/result-kit/issues/21)
+**Ticket:** [#22](https://github.com/alifaroo-q/result-kit/issues/22) · **Spec:** [`docs/spec/v5-core-spec.md`](../spec/v5-core-spec.md) §3, §3.1, §3.2, §3.3, §5.1, §10.3 · **Decision:** [ADR 0002](../adr/0002-v2-typederror-model.md) · **Prototype:** [`prototype/define-error/`](../../prototype/define-error/README.md) · **Blocked by:** [#21](https://github.com/alifaroo-q/result-kit/issues/21)
 
 ---
 
 ## Prerequisites — what #21 left behind
 
-This ticket is blocked by [#21](https://github.com/alifarooq-zk/result-kit/issues/21) and assumes it merged. Before starting, confirm:
+This ticket is blocked by [#21](https://github.com/alifaroo-q/result-kit/issues/21) and assumes it merged. Before starting, confirm:
 
 ```bash
 git checkout main && git pull
@@ -25,7 +25,7 @@ pnpm check            # expect: exit 0, no output
 
 If `pnpm test` reports anything else, stop — #21 has drifted and this plan's baseline is wrong.
 
-**Read [#21](https://github.com/alifarooq-zk/result-kit/issues/21)'s closing comment first** to learn whether the toolchain landed on TypeScript **7.0.2** or fell back to **6.0.3**. Nothing in this ticket depends on the difference — there are no generators or async iterators here — but the plan's expected `tsc` output assumes one of the two is installed and green.
+**Read [#21](https://github.com/alifaroo-q/result-kit/issues/21)'s closing comment first** to learn whether the toolchain landed on TypeScript **7.0.2** or fell back to **6.0.3**. Nothing in this ticket depends on the difference — there are no generators or async iterators here — but the plan's expected `tsc` output assumes one of the two is installed and green.
 
 ## The one real decision — the prototype's runtime is broken, and the port must fix it
 
@@ -104,7 +104,7 @@ Both forms were verified against this exact code before writing: `expectTypeOf<R
 
 ## Task order
 
-The prototype already de-risked the type-level design — that is why this ticket was pulled early, as the low-risk slice that proves the harness before the hard inference work in [#23](https://github.com/alifarooq-zk/result-kit/issues/23) and [#24](https://github.com/alifarooq-zk/result-kit/issues/24). So "riskiest first" resolves differently here:
+The prototype already de-risked the type-level design — that is why this ticket was pulled early, as the low-risk slice that proves the harness before the hard inference work in [#23](https://github.com/alifaroo-q/result-kit/issues/23) and [#24](https://github.com/alifaroo-q/result-kit/issues/24). So "riskiest first" resolves differently here:
 
 1. **`TypedError` + `isTypedError` first** — a genuine dependency, not a preference: `ErrorCtor` references `TypedError` in its return type, so nothing else compiles without it.
 2. **Task 2 carries this ticket's only real risk** — it introduces `build` with the definition-time `hasPayload` flag, the one thing the prototype did not settle.
@@ -979,7 +979,7 @@ git commit -m '`CHORE`: - deletes the throwaway defineError prototype now that t
 
 ### Task 7: Full verification against the ticket
 
-No new code. This is the acceptance gate for [#22](https://github.com/alifarooq-zk/result-kit/issues/22).
+No new code. This is the acceptance gate for [#22](https://github.com/alifaroo-q/result-kit/issues/22).
 
 - [ ] **Step 1: Run the three project commands clean**
 
@@ -1011,7 +1011,7 @@ Expected: `zero-dep ok`. This ticket adds no dependency; the check guards agains
 
 - [ ] **Step 5: Walk the ticket's acceptance criteria**
 
-Tick each box on [#22](https://github.com/alifarooq-zk/result-kit/issues/22) against the evidence:
+Tick each box on [#22](https://github.com/alifaroo-q/result-kit/issues/22) against the evidence:
 
 | Ticket criterion | Proven by |
 |---|---|
@@ -1038,6 +1038,6 @@ gh pr create --title "TypedError + defineError: the opt-in structured-error conv
 
 ## Notes for the next ticket
 
-- **The prototype's silent bug is worth remembering when [#23](https://github.com/alifarooq-zk/result-kit/issues/23) builds `safeTry`.** It typechecked perfectly and still dropped data, because the *types* were right and the *runtime* sniffed its arguments. #23 has no prototype at all and is the most inference-sensitive thing in the spec — a green `tsc` there will prove even less than it did here. Pair every type assertion with a runtime one.
-- **`ErrorCtor` is now exported** and appears in `defineError`'s public signature (spec §10.2 decided all three helper types are public). [#31](https://github.com/alifarooq-zk/result-kit/issues/31) should document it in the README alongside `defineError`.
+- **The prototype's silent bug is worth remembering when [#23](https://github.com/alifaroo-q/result-kit/issues/23) builds `safeTry`.** It typechecked perfectly and still dropped data, because the *types* were right and the *runtime* sniffed its arguments. #23 has no prototype at all and is the most inference-sensitive thing in the spec — a green `tsc` there will prove even less than it did here. Pair every type assertion with a runtime one.
+- **`ErrorCtor` is now exported** and appears in `defineError`'s public signature (spec §10.2 decided all three helper types are public). [#31](https://github.com/alifaroo-q/result-kit/issues/31) should document it in the README alongside `defineError`.
 - **`CONTEXT.md` already defines `TypedError`, `type`, `details`, and `defineError`** with `_Avoid_` lines, and this implementation matches them exactly — no glossary change is needed from this ticket. #31 still owes entries for `ResultChain`, `ResultAsync`, `safeTry`, and `safeUnwrap`.

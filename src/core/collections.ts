@@ -65,7 +65,7 @@ export function combine<T extends readonly Result<unknown, unknown>[]>(
  *
  * The `ZodError.issues[]` analog, and the whole of the accumulation story for
  * this release — formatter helpers were declined and backlogged to
- * {@link https://github.com/alifarooq-zk/result-kit/issues/18 | #18}. Use it
+ * {@link https://github.com/alifaroo-q/result-kit/issues/18 | #18}. Use it
  * where a caller wants to report *all* that went wrong (form validation, a
  * parsed batch) rather than stopping at the first problem, which is
  * {@link combine}'s job.
