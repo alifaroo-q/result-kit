@@ -3,8 +3,8 @@ import {
   isOk as coreIsOk,
   type Result,
 } from '../core/result';
-import { isThenable } from '../core/thenable';
-import type { NoThenableReturn } from '../core/thenable';
+import { isSettledResult } from '../core/thenable';
+import type { SettledOr } from '../core/thenable';
 import {
   match as coreMatch,
   toNullable as coreToNullable,
@@ -24,8 +24,40 @@ import {
 import { ResultAsync } from './result-async';
 
 /**
- * What the four guarded core transforms return **for the calls this class makes**
- * — always a settled `Result`, never a promise.
+ * Re-wraps whatever a core transform handed back into the matching envelope.
+ *
+ * **Restored by §10.11**, having been deleted by §10.9 as "the defect". That was
+ * wrong, and the deletion was a net regression. `wrap()` was never the thing
+ * that made the sync→async seam unsound — the *async-callback arm* was, and
+ * removing that arm is what fixed it. What `wrap()` actually did was cope with
+ * the case where the core returns a promise anyway, which §2's brandless union
+ * still permits: a structurally valid `{ ok: true, value }` may also carry a
+ * `then`, and then the core's own `isThenable` sends it down the async path.
+ * Without this, that promise was stuffed into a `ResultChain` and `.toResult()`
+ * returned a `Promise` typed as a settled `Result` — `.ok` reading `undefined`,
+ * a success read as a failure. With it, the caller gets a `ResultAsync`, which
+ * is what the return type now admits.
+ *
+ * It reads the core's decision rather than making a second one.
+ */
+function wrap<U, F>(
+  out: Result<U, F> | Promise<Result<U, F>>,
+): ResultChain<U, F> | ResultAsync<U, F> {
+  return isSettledResult(out)
+    ? new ResultChain(out as Result<U, F>)
+    : ResultAsync.from(out as Promise<Result<U, F>>);
+}
+
+/**
+ * The fluent counterpart of §10.11's {@link SettledOr}: a settled wrapper when
+ * the callback cannot return a thenable, and the honest pair when it can.
+ */
+type ChainOr<U, C, A> = [Extract<U, PromiseLike<unknown>>] extends [never]
+  ? C
+  : C | A;
+
+/**
+ * What the core transforms return for the calls this class makes.
  *
  * That is a stronger statement than it was before §10.9, and it is now true by
  * construction rather than by convention: every member below rejects a
@@ -36,7 +68,7 @@ import { ResultAsync } from './result-async';
  * silently wrong on the short-circuit branch, because a callback that never runs
  * produces no thenable to detect.
  */
-type Settled<U, F> = Result<U, F>;
+type Settled<U, F> = Result<U, F> | Promise<Result<U, F>>;
 
 /**
  * The four guarded core transforms, re-typed **without** §10.7's
@@ -152,17 +184,15 @@ export class ResultChain<T, E> {
    */
   map<U>(
     fn: (value: T) => U,
-    ...reject: NoThenableReturn<U>
-  ): ResultChain<U, E> {
-    return new ResultChain(mapUnguarded(this.#result, fn));
+  ): ChainOr<U, ResultChain<Awaited<U>, E>, ResultAsync<Awaited<U>, E>> {
+    return wrap(mapUnguarded(this.#result, fn)) as never;
   }
 
   /** Transforms the error of an `Err`, passing an `Ok` through untouched. */
   mapErr<F>(
     fn: (error: E) => F,
-    ...reject: NoThenableReturn<F>
-  ): ResultChain<T, F> {
-    return new ResultChain(mapErrUnguarded(this.#result, fn));
+  ): ChainOr<F, ResultChain<T, Awaited<F>>, ResultAsync<T, Awaited<F>>> {
+    return wrap(mapErrUnguarded(this.#result, fn)) as never;
   }
 
   /**
@@ -190,9 +220,8 @@ export class ResultChain<T, E> {
    */
   inspect<R>(
     fn: (value: T) => R,
-    ...reject: NoThenableReturn<R>
-  ): ResultChain<T, E> {
-    return new ResultChain(inspectUnguarded(this.#result, fn));
+  ): ChainOr<R, ResultChain<T, E>, ResultAsync<T, E>> {
+    return wrap(inspectUnguarded(this.#result, fn)) as never;
   }
 
   /**
@@ -201,9 +230,8 @@ export class ResultChain<T, E> {
    */
   inspectErr<R>(
     fn: (error: E) => R,
-    ...reject: NoThenableReturn<R>
-  ): ResultChain<T, E> {
-    return new ResultChain(inspectErrUnguarded(this.#result, fn));
+  ): ChainOr<R, ResultChain<T, E>, ResultAsync<T, E>> {
+    return wrap(inspectErrUnguarded(this.#result, fn)) as never;
   }
 
   /**

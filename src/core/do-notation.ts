@@ -1,5 +1,5 @@
 import type { Err, Ok, Result } from './result';
-import { isThenable } from './thenable';
+import { isSettledResult, isThenable } from './thenable';
 
 /**
  * The error types carried by a union of {@link Err}s.
@@ -60,7 +60,7 @@ export function safeUnwrap<T, E = never>(
 export function safeUnwrap<T, E = never>(
   result: Result<T, E> | PromiseLike<Result<T, E>>,
 ): Generator<Err<E>, T> | AsyncGenerator<Err<E>, T> {
-  if (isThenable(result)) {
+  if (!isSettledResult(result)) {
     return (async function* () {
       const awaited = await result;
       if (awaited.ok) return awaited.value;

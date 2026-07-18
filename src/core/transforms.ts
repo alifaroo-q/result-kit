@@ -1,7 +1,7 @@
 import { err, ok } from './result';
 import type { Result } from './result';
-import { isThenable } from './thenable';
-import type { NoThenableReturn } from './thenable';
+import { isSettledResult, isThenable } from './thenable';
+import type { SettledOr } from './thenable';
 
 /**
  * Every transform below shares one overload pattern, and its **arm order is
@@ -46,8 +46,7 @@ import type { NoThenableReturn } from './thenable';
 export function map<T, U, E = never>(
   result: Result<T, E>,
   fn: (value: T) => U,
-  ...reject: NoThenableReturn<U>
-): Result<U, E>;
+): SettledOr<U, Result<Awaited<U>, E>>;
 export function map<T, U, E = never>(
   result: PromiseLike<Result<T, E>>,
   fn: (value: T) => PromiseLike<U>,
@@ -80,9 +79,9 @@ export function map(
       : ok(mapped);
   };
 
-  return isThenable(result)
-    ? Promise.resolve(result).then(step)
-    : step(result);
+  return isSettledResult(result)
+    ? step(result)
+    : Promise.resolve(result).then(step);
 }
 
 /**
@@ -94,8 +93,7 @@ export function map(
 export function mapErr<T, E = never, F = never>(
   result: Result<T, E>,
   fn: (error: E) => F,
-  ...reject: NoThenableReturn<F>
-): Result<T, F>;
+): SettledOr<F, Result<T, Awaited<F>>>;
 export function mapErr<T, E = never, F = never>(
   result: PromiseLike<Result<T, E>>,
   fn: (error: E) => PromiseLike<F>,
@@ -118,9 +116,9 @@ export function mapErr(
       : err(mapped);
   };
 
-  return isThenable(result)
-    ? Promise.resolve(result).then(step)
-    : step(result);
+  return isSettledResult(result)
+    ? step(result)
+    : Promise.resolve(result).then(step);
 }
 
 /**
@@ -156,12 +154,12 @@ export function andThen(
 
     const next = fn(settled.value);
 
-    return isThenable(next) ? Promise.resolve(next) : next;
+    return isSettledResult(next) ? next : Promise.resolve(next);
   };
 
-  return isThenable(result)
-    ? Promise.resolve(result).then(step)
-    : step(result);
+  return isSettledResult(result)
+    ? step(result)
+    : Promise.resolve(result).then(step);
 }
 
 /**
@@ -194,12 +192,12 @@ export function orElse(
 
     const next = fn(settled.error);
 
-    return isThenable(next) ? Promise.resolve(next) : next;
+    return isSettledResult(next) ? next : Promise.resolve(next);
   };
 
-  return isThenable(result)
-    ? Promise.resolve(result).then(step)
-    : step(result);
+  return isSettledResult(result)
+    ? step(result)
+    : Promise.resolve(result).then(step);
 }
 
 /**
@@ -209,8 +207,7 @@ export function orElse(
 export function inspect<T, E = never, R = unknown>(
   result: Result<T, E>,
   fn: (value: T) => R,
-  ...reject: NoThenableReturn<R>
-): Result<T, E>;
+): SettledOr<R, Result<T, E>>;
 export function inspect<T, E = never>(
   result: PromiseLike<Result<T, E>>,
   fn: (value: T) => unknown,
@@ -245,9 +242,9 @@ export function inspect(
       : settled;
   };
 
-  return isThenable(result)
-    ? Promise.resolve(result).then(step)
-    : step(result);
+  return isSettledResult(result)
+    ? step(result)
+    : Promise.resolve(result).then(step);
 }
 
 /**
@@ -258,8 +255,7 @@ export function inspect(
 export function inspectErr<T, E = never, R = unknown>(
   result: Result<T, E>,
   fn: (error: E) => R,
-  ...reject: NoThenableReturn<R>
-): Result<T, E>;
+): SettledOr<R, Result<T, E>>;
 export function inspectErr<T, E = never>(
   result: PromiseLike<Result<T, E>>,
   fn: (error: E) => unknown,
@@ -278,7 +274,7 @@ export function inspectErr(
       : settled;
   };
 
-  return isThenable(result)
-    ? Promise.resolve(result).then(step)
-    : step(result);
+  return isSettledResult(result)
+    ? step(result)
+    : Promise.resolve(result).then(step);
 }

@@ -3,7 +3,7 @@ import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { err as coreErr, ok as coreOk } from '../../src/index';
 import type { Result } from '../../src/index';
 import { err, from, ok } from '../../src/fluent/index';
-import type { ResultChain } from '../../src/fluent/index';
+import type { ResultAsync, ResultChain } from '../../src/fluent/index';
 
 /**
  * REMINDER: every `expectTypeOf` and `@ts-expect-error` below is enforced by
@@ -351,24 +351,32 @@ const fetchCredit = async (_id: string): Promise<number> => 10;
 const lookupCredit = (id: string) => creditCache.get(id) ?? fetchCredit(id);
 
 describe('ResultChain and the mixed value-or-promise callback (#36)', () => {
-  it('rejects it in map, rather than returning a ResultAsync typed as a ResultChain', () => {
-    // @ts-expect-error - a `U | Promise<U>` callback must not match the sync arm
-    ok(user).map((u) => lookupCredit(String(u.credit)));
+  it('types it as the honest wrapper pair in map, not as a bare ResultChain', () => {
+    expectTypeOf(ok(user).map((u) => lookupCredit(String(u.credit)))).toEqualTypeOf<
+      ResultChain<number, never> | ResultAsync<number, never>
+    >();
   });
 
-  it('rejects it in mapErr', () => {
-    // @ts-expect-error - see above
-    from(errUser()).mapErr((e) => lookupCredit(e.id));
+  it('types it as the honest pair in mapErr', () => {
+    expectTypeOf(
+      from(errUser()).mapErr((e) => lookupCredit(e.id)),
+    ).toEqualTypeOf<
+      ResultChain<User, number> | ResultAsync<User, number>
+    >();
   });
 
-  it('rejects it in inspect', () => {
-    // @ts-expect-error - see above
-    ok(user).inspect((u) => lookupCredit(String(u.credit)));
+  it('types it as the honest pair in inspect', () => {
+    expectTypeOf(ok(user).inspect((u) => lookupCredit(String(u.credit)))).toEqualTypeOf<
+      ResultChain<User, never> | ResultAsync<User, never>
+    >();
   });
 
-  it('rejects it in inspectErr', () => {
-    // @ts-expect-error - see above
-    from(errUser()).inspectErr((e) => lookupCredit(e.id));
+  it('types it as the honest pair in inspectErr', () => {
+    expectTypeOf(
+      from(errUser()).inspectErr((e) => lookupCredit(e.id)),
+    ).toEqualTypeOf<
+      ResultChain<User, NotFound> | ResultAsync<User, NotFound>
+    >();
   });
 
   it('still returns a ResultChain for an ordinary value-returning sync callback', () => {
@@ -391,8 +399,9 @@ describe('ResultChain and the mixed value-or-promise callback (#36)', () => {
     expect(seen).toEqual([10]);
   });
 
-  it('rejects an async tee on the sync surface', () => {
-    // @ts-expect-error - §10.9: cross with .toAsync() first
-    ok(user).inspect(async (u) => seenSink.push(u.credit));
+  it('types an async tee on the sync surface as the honest pair', () => {
+    expectTypeOf(ok(user).inspect(async (u) => seenSink.push(u.credit))).toEqualTypeOf<
+      ResultChain<User, never> | ResultAsync<User, never>
+    >();
   });
 });
