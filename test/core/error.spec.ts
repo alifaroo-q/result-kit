@@ -336,6 +336,18 @@ describe('the guards against the shapes their own types admit (#36 retro)', () =
     expect(notFound.is({ type: 'not_found' })).toBe(false);
   });
 
+  it('ErrorCtor.is accepts a callable variant, matching isTypedError', () => {
+    // `.is()` got two changes and only the `message` half was pinned; reverting
+    // the function-admit left the whole suite green.
+    const rateLimited = defineError('rate_limited', 'slow down');
+    const callable = Object.assign((n: number) => n + 1, {
+      type: 'rate_limited',
+      message: 'slow down, please',
+    });
+
+    expect(rateLimited.is(callable)).toBe(true);
+  });
+
   it('ErrorCtor.is still accepts a well-formed variant', () => {
     const notFound = defineError('not_found', 'not found');
 
