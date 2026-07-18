@@ -1,6 +1,8 @@
+import { safeUnwrap as coreSafeUnwrap } from '../core/do-notation';
 import {
   isErr as coreIsErr,
   isOk as coreIsOk,
+  type Err,
   type Result,
 } from '../core/result';
 import { isSettledResult } from '../core/thenable';
@@ -348,5 +350,32 @@ export class ResultChain<T, E> {
    */
   toJSON(): Result<T, E> {
     return this.toResult();
+  }
+
+  /**
+   * Makes the wrapper `yield*`-able inside a `/fluent` {@link safeTry} block —
+   * **this is what makes ADR 0007 §3's "no `safeUnwrap` needed at `/fluent`"
+   * true** rather than aspirational (§6.1, §6.3).
+   *
+   * Yields `Err<E>` — the short-circuit signal `safeTry` consumes — and *returns*
+   * `T`, so `const v = yield* chain` binds the unwrapped value, and each `yield*`
+   * in a block binds its own type. Exactly the contract `safeUnwrap` has at root,
+   * which is not a coincidence: this **delegates to it** rather than
+   * reimplementing the protocol, per §4 rule 2.
+   *
+   * @remarks
+   * **This does not touch §2 or the §2.1 JSON round-trip.** Those govern the core
+   * union only, and ADR 0007 §2 put iterability in an adapter precisely so that
+   * `ok()` / `err()` keep producing plain, brandless, non-iterable data. The
+   * wrapper is already a class; making *it* iterable costs the data nothing.
+   * `test/fluent/do-notation.spec.ts` asserts the core union stays non-iterable
+   * at both the runtime and the type level, so the separation fails loudly rather
+   * than eroding.
+   *
+   * What is yielded is the **plain** `Err`, not a wrapper — the short-circuit
+   * value is `safeTry`'s to interpret, and the §7.3 boundary guard reads it.
+   */
+  *[Symbol.iterator](): Generator<Err<E>, T> {
+    return yield* coreSafeUnwrap(this.#result);
   }
 }

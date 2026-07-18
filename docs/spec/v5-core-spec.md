@@ -536,8 +536,15 @@ export function ok<T>(value: T): ResultChain<T, never>;
 export function err<E>(error: E): ResultChain<never, E>;
 export function from<T, E>(result: Result<T, E>): ResultChain<T, E>;
 
-export function safeTry<T, E>(gen: () => Generator<..., Result<T, E>>): ResultChain<T, E>;
-export function safeTry<T, E>(gen: () => AsyncGenerator<..., Result<T, E>>): ResultAsync<T, E>;
+// The body may return EITHER half of the dual constructor — see §10.13.
+type BodyReturn = Result<unknown, unknown> | ResultChain<unknown, unknown>;
+
+export function safeTry<Y extends Err<unknown>, R extends BodyReturn>(
+  gen: () => Generator<Y, R>,
+): ResultChain<ValueOf<R>, ErrorOf<Y> | ErrorOf<R>>;
+export function safeTry<Y extends Err<unknown>, R extends BodyReturn>(
+  gen: () => AsyncGenerator<Y, R>,
+): ResultAsync<ValueOf<R>, ErrorOf<Y> | ErrorOf<R>>;
 
 // dual constructors — §4, ADR 0005 §4. Same names as root, wrapper return types.
 export function fromPromise<T, E>(promise: Promise<T>, onReject: (error: unknown) => E): ResultAsync<T, E>;
@@ -548,6 +555,7 @@ export function fromThrowableAsync<Args extends unknown[], T, E>(
 ```
 
 - **`/fluent` has no `safeUnwrap`** — the wrapper is self-iterable, so `yield* chain` works directly. Root's `safeUnwrap` remains available for unwrapping a *plain* union inside a fluent `safeTry`.
+- **The body returns a `ResultChain` *or* a plain `Result`, and `Y`/`R` are naked** — amended 2026-07-18 at build, see **§10.13**. The signature above originally read `gen: () => Generator<..., Result<T, E>>`, which rejects the one thing a `/fluent` user actually writes: `ok` is the dual constructor here, so `return ok(v)` produces a **wrapper**. The naked type parameters carry §5.7's implementation notes 1 and 2 for the same reasons the core's do.
 - **`fromPromise` ≠ `ResultAsync.from`.** `ResultAsync.from` lifts a `Promise<Result<T, E>>` that is *already* a union; `fromPromise` catches a rejection off a raw `Promise<T>` into the `E` channel. Neither substitutes for the other, which is why omitting `fromPromise` here would have left a `/fluent` user no rejection-catching entry into the wrapper without importing from root — breaking core/wrapper symmetry in the opposite direction to the one §4 guards.
 - **`ResultChain` is exported as a type; instances come from `ok`/`err`/`from`/`safeTry`.** `ResultAsync` is exported as a **value** (class) because [ADR 0005 §4](../adr/0005-v2-async-strategy.md) specifies the static `ResultAsync.from(promiseOfResult)`. The asymmetry — free `from` for sync, static `ResultAsync.from` for async — is as-decided; do not "fix" it without a new decision.
 
@@ -1031,7 +1039,54 @@ Demonstrated before fixing, not argued: with a `ResultChain` export bolted onto 
 
 - **Not escalated to an ADR.** §7.3's requirement is unchanged; its test now covers what its note already claimed.
 
-**This spec no longer contains an open question** — for the ninth time, and the phrase has now been wrong seven times. Each pass applies pressure the last could not: §10.1–§10.4 came from consolidating eight ADRs, §10.5 from reading the spec as a builder, §10.6 from *being* one, §10.7 from **retroing shipped, green, reviewed code**, §10.8 from **checking that retro's own sources against the primary record**, §10.9 from **four independent lenses over the same seam at once**, §10.10 from **picking up the finding a retro had itself deferred as low-severity**, and §10.11 from **three passes briefed to refute rather than confirm**. Treat "no open questions" as a claim with a short half-life, not a property.
+### 10.13 The `/fluent` do-notation body returns a wrapper — **decided (2026-07-18, at build)**
+
+[#30](https://github.com/alifarooq-zk/result-kit/issues/30), the ticket that makes ADR 0007 §3's *"no `safeUnwrap` needed at `/fluent`"* true rather than aspirational. §6.3's `safeTry` sketch did not survive being implemented, and the reason is one this document has hit before in a different slot: **the signature was written from the root's vantage point and read as though it were the wrapper's.**
+
+§6.3 spelled the body `gen: () => Generator<..., Result<T, E>>`. That is the correct shape at root. At `/fluent` it rejects the only thing a user on that surface actually writes:
+
+```ts
+import { safeTry, ok } from '@zireal/result-kit/fluent';
+
+safeTry(function* () {
+  const user = yield* findUser(id);   // ResultChain — self-iterable, the point of the ticket
+  return ok(user.credit);             // ResultChain, NOT Result — TS2345 under the literal signature
+});
+```
+
+`ok` / `err` are **dual constructors** (§4): same name at both entrypoints, surface-appropriate return type. So the `ok` in scope inside a `/fluent` block returns a `ResultChain`, and a signature demanding a plain `Result` at the exit is asking the user to leave the surface they are on. Both escapes are things this project has already rejected — `return ok(v).toResult()` reintroduces exactly the ceremony do-notation exists to kill, and importing root's `ok` into a `/fluent` block is the cross-entrypoint dependency [ADR 0005 §4](../adr/0005-v2-async-strategy.md) refused, pointing the same direction §10.5 refused it.
+
+**The body therefore returns either half**, `Result<unknown, unknown> | ResultChain<unknown, unknown>`, decomposed by `/fluent`-local `ValueOf` / `ErrorOf` that take both arms. The plain half is kept rather than tolerated: the mixed case §6.3 itself calls out — root's `safeUnwrap` over a plain union inside a fluent block — genuinely leaves a plain `Result` in hand at the exit. The two arms cannot collide, because `ResultChain` carries a native-private field and so never matches `Ok`/`Err` structurally, and the plain union has no `#result`.
+
+**`ResultAsync` needs no arm, and the first draft of this section gave a false reason for that** — caught by the adversarial pass on the same day, and recorded here rather than quietly corrected, because the *shape* of the error matters more than the error.
+
+The true mechanism: `ResultAsync implements PromiseLike`, and an async generator's `TReturn` is awaited by **tsc and the runtime alike**. So `return someResultAsync` types as `Result<T, E>` — which `BodyReturn` already admits — and resolves to exactly that. Types and value agree, and the shape works today:
+
+```ts
+safeTry(async function* () {
+  yield* asyncUser();
+  return asyncScore();          // ResultAsync<number, never>
+});                             // → ResultAsync<number, NotFound>, resolving to ok(42)
+```
+
+The arm `ResultChain` needs is therefore precisely the **non-thenable** case: neither side awaits a `ResultChain`, so it survives to the return slot as a wrapper and must be decomposed. The two halves of the dual constructor need opposite treatment for one reason — whether they are thenable.
+
+**What the first draft claimed** was that tsc does *not* await `TReturn` while the runtime does, that admitting `ResultAsync` would therefore publish a type disagreeing with its value (§10.6's failure mode), and — in the same breath — that this was *"verified by prototype before deciding, not assumed."* Every clause is wrong, and the last one is why the others survived. The prototype returned a **`ResultChain`**, which is not thenable and so correctly stayed a wrapper; that result was then generalized to `ResultAsync`, which is thenable, without being re-run. The probe was real, the citation was honest, and the inference between them was never checked.
+
+**This is §10.8's rule violated inside the erratum that cites it** — *cite the source, not the summary, including when the summary is your own and an hour old.* The summary here was an hour old and was the author's own. It also cost a real capability: users were told to write `return ok(yield* ra)` to route around a restriction that did not exist. Both assertions are now pinned by exact-type and runtime tests, so the corrected claim is guarded rather than merely restated.
+
+Two further details were inherited rather than rediscovered, and it is worth recording that they were *checked*:
+
+- **`Y` and `R` are naked**, carrying §5.7's implementation notes 1 and 2. A concrete spelling in either slot keeps only the first inference candidate — silently collapsing a yielded `NotFound | Forbidden`, and failing to resolve the call at all on the two-`return err(…)` shape ADR 0007 §6 blesses. Both are pinned by exact-type assertions, and both were **mutation-proven**: narrowing the expected channel makes `tsc` fail, which is the check §10.10 established is necessary, since `Result<T, never>` assigns into every `Result<T, E>` and assignability alone would hide the collapse.
+- **§10.11's input check applies here too**, and it is load-bearing rather than defensive. §2's union is brandless, so a body can return a structurally valid `{ ok: true, value }` that also carries a `then` — reachable precisely through the mixed case above. Asking "is this thenable?" before "is this settled?" assimilates it, and a synchronous block returns a `ResultAsync` where the signature promised a `ResultChain`. So the fluent runner recognises the settled shapes **first** — `ResultChain` by `instanceof`, plain `Result` by its boolean `ok`. Pinned by a test that goes red under the thenable-first ordering.
+
+Short-circuit, generator closing (§10.9's `.return()`), and union accumulation are **not reimplemented** — the fluent runner delegates to the core one, per §4 rule 2, so those hold by construction rather than by parallel maintenance.
+
+- **Rejected — require `.toResult()` at the exit.** Honest and needs no signature change, but it puts ceremony on the hero path of the ticket whose entire purpose is removing ceremony.
+- **Rejected — make `/fluent`'s `ok`/`err` return plain `Result`s inside blocks.** Not expressible, and it would break §4's dual-constructor rule to fix a signature.
+- **Not escalated to an ADR.** No decision reverses: ADR 0007 §3's placement table already says the `/fluent` runner returns a wrapper, and §4's dual-constructor rule is what forces this. §6.3's signature simply had not been read against the surface it governs.
+
+**This spec no longer contains an open question** — for the tenth time, and the phrase has now been wrong eight times. Each pass applies pressure the last could not: §10.1–§10.4 came from consolidating eight ADRs, §10.5 from reading the spec as a builder, §10.6 from *being* one, §10.7 from **retroing shipped, green, reviewed code**, §10.8 from **checking that retro's own sources against the primary record**, §10.9 from **four independent lenses over the same seam at once**, §10.10 from **picking up the finding a retro had itself deferred as low-severity**, §10.11 from **three passes briefed to refute rather than confirm**, and §10.13 from **building the surface this document described and discovering its signature had been written from the other entrypoint's vantage point**. Treat "no open questions" as a claim with a short half-life, not a property.
 
 The half-life got shorter, and §10.8 is the sharpest demonstration this document has. **§10.7 was written and green on the same day §10.8 refuted a load-bearing sentence in it** — an ecosystem claim about nine libraries, asserted from a survey nobody had checked against the source. §10.6 earned the rule *"an erratum's blast radius is a claim, not an observation"*; §10.7 restated it and then violated it in its own prose. The corrected version is narrower and more useful: it turned up an option (`then` + `catch`) that the wrong version had defined out of existence. **Cite the source, not the summary — including when the summary is your own and an hour old.**
 
