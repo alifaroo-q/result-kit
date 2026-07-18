@@ -1,4 +1,5 @@
-import type { Result } from '../core/result';
+import { safeUnwrap as coreSafeUnwrap } from '../core/do-notation';
+import type { Err, Result } from '../core/result';
 import {
   match as coreMatch,
   toNullable as coreToNullable,
@@ -227,5 +228,28 @@ export class ResultAsync<T, E> implements PromiseLike<Result<T, E>> {
       'Cannot serialize an in-flight ResultAsync. ' +
         'await it first, then serialize the Result: JSON.stringify(await resultAsync)',
     );
+  }
+
+  /**
+   * Makes the wrapper `yield*`-able inside an **async** `/fluent`
+   * {@link safeTry} block.
+   *
+   * **Forced, not chosen** (§6.2). Inside an `async function*`, `yield* ra`
+   * resolves through `[Symbol.asyncIterator]`; `ResultChain`'s sync
+   * `[Symbol.iterator]` does not cover the async case, so without this the
+   * "no `safeUnwrap` needed at `/fluent`" claim would hold on the sync half only
+   * — and the async half is where the realistic call sites live (ADR 0007 §4).
+   *
+   * Delegates to the core `safeUnwrap`'s promise arm, which awaits the pending
+   * `Result` and yields the plain `Err` on the short-circuit branch. No `await`
+   * ceremony reaches the call site, which is the entire point.
+   *
+   * @remarks
+   * Yielding the **plain** `Err`, and iterability living on the wrapper rather
+   * than on the data, are the same two decisions {@link ResultChain} records —
+   * §2 and §2.1 govern the core union and are untouched here.
+   */
+  async *[Symbol.asyncIterator](): AsyncGenerator<Err<E>, T> {
+    return yield* coreSafeUnwrap(this.#promise);
   }
 }
