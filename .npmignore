@@ -5,3 +5,7 @@
 !dist/**/*.js
 !dist/*.d.ts
 !dist/**/*.d.ts
+
+# The one consumer-facing doc README links to. npm always ships
+# README/LICENSE/package.json; this needs an explicit allow.
+!MIGRATION.md
