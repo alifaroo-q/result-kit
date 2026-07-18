@@ -194,7 +194,7 @@ export function isTypedError(x: unknown): x is TypedError;
 // defineError — §3.1
 ```
 
-- **Narrow returns.** `ok`/`err` return `Ok<T>`/`Err<E>`, *not* `Result<T, never>`/`Result<never, E>`. Narrow is strictly more precise — it still assigns into any `Result<T, E>` annotation (widening is free) while preserving `.value`/`.error` access for code holding a known half.
+- **Narrow returns.** `ok`/`err` return `Ok<T>`/`Err<E>`, *not* `Result<T, never>`/`Result<never, E>`. Narrow is strictly more precise — it still assigns into any `Result<T, E>` annotation (widening is free) while preserving `.value`/`.error` access for code holding a known half. **Both clauses hold for the value itself and neither survived a transform until §10.10** — a narrow half offers `E` no inference site, so `E` fell back to `unknown` one hop later and stopped assigning anywhere. The decision stands; its cost is now recorded and paid by defaulting `E` to `never`.
 - **`ok(): Ok<void>` overload** for the common `Result<void, E>` success — `return ok()` beats `ok(undefined)`.
 - **Guards emit type predicates**, not plain booleans. `if (isOk(r)) { r.value }` must narrow.
 - **`isTypedError` signature — spec decision.** [ADR 0002](../adr/0002-v2-typederror-model.md) renders it `x is TypedError` (base, `TData = Record<string, unknown>`); [ADR 0004](../adr/0004-v2-api-surface-method-inventory.md) renders it `error is TypedError<string>`. These differ only in whether `TData` takes the interface default. **The spec takes ADR 0002's form** — `x is TypedError` — because ADR 0002 owns the error model and its `TData` default is the deliberate one. Recorded in §10.
@@ -960,7 +960,31 @@ The wrapper got *simpler*: each member collapsed from an overload pair to one si
 
 - **Not escalated to an ADR.** No decision is reversed: ADR 0005's "input drives output" is *upheld*, and this is what it actually entails — a settled input drives a settled output, always. ADR 0007's do-notation semantics are unchanged; §5.7's signatures now deliver what they always described.
 
-**This spec no longer contains an open question** — for the sixth time. Each pass applies pressure the last could not: §10.1–§10.4 came from consolidating eight ADRs, §10.5 from reading the spec as a builder, §10.6 from *being* one, §10.7 from **retroing shipped, green, reviewed code**, §10.8 from **checking that retro's own sources against the primary record**, and §10.9 from **four independent lenses over the same seam at once**. Treat "no open questions" as a claim with a short half-life, not a property.
+### 10.10 `E` defaults to `never` where a narrow half gives it no inference site — **decided (2026-07-18, at retro)**
+
+Filed as [#37](https://github.com/alifarooq-zk/result-kit/issues/37) out of the same retro that produced §10.7, deferred as low-severity, and picked up before the freeze because it traces to a **signature** decision.
+
+§5.1 returns the narrow `Ok<T>` deliberately. `Ok<T>` has no `Err` member, so it offers `E` **no inference site**, and `E` fell back to `unknown`:
+
+```ts
+const withCtx: Result<number, MyErr> = map(ok(1), (v) => v + 1);  // fine — context supplies E
+const noCtx = map(ok(1), (v) => v + 1);                            // Result<number, unknown>
+use(noCtx);                                                        // TS2345 — assigns nowhere
+```
+
+The papercut is the **un-annotated intermediate binding**; the annotated shape always worked, which is why it went unnoticed. `E` now defaults to `never` — the honest answer, since a value built by `ok(1)` genuinely has no error channel, and `Result<T, never>` assigns into every `Result<T, E>`.
+
+**A default fires exactly when inference finds no candidate**, which is the §5.3 `UErr` precedent and the mechanism §5.7 used before §10.9 made it unnecessary there. The risk is that it *masks* a real inference failure, so that was checked directly rather than assumed: a transform over a genuine `Result<T, A>` still infers `A`, and `andThen` still accumulates `A | B`. **Assignability alone cannot prove this** — `Result<T, never>` assigns into every `Result<T, E>`, which is precisely what masking would hide behind — so the check uses exact-type assertions, not assignment.
+
+**The blast radius was wider than the ticket**, which named only §5.2. Applying §10.6's lesson rather than restating it — *grep the class* — `E` reaches a user-visible position in four more places, each with the same fallback: `match` and `unwrapOrElse` (handler parameter typed `unknown`), `partition` (`E[]` in the output), and `safeUnwrap`, which propagated `unknown` through `safeTry` so a whole do-notation block over a bare `ok()` assigned nowhere. All defaulted. `unwrapOr`, `unwrapOrThrow`, `toNullable`, and `combine` were checked and left alone — `E` is input-only there and never surfaces.
+
+**§5.1's note is corrected, not its decision.** It read: *"strictly more precise, and it still assigns into any `Result<T, E>` annotation."* Both clauses are true of `ok(1)` **itself**; neither survived one transform. The note described a property of the *constructor* and read as a property of the *value*. Narrow returns remain the right call — the trade was real, and was recorded as costless.
+
+- **Rejected — widen `ok` to `Result<T, never>`.** Fixes it at the source by reversing an explicit §5.1 decision, losing the `.value` access that narrow halves exist to preserve.
+- **Rejected — leave the signatures and fix only the note.** The cheapest option, and it was the ticket's own first suggestion. But the default costs nothing, cannot mask (verified), and fixes the papercut rather than documenting it.
+- **Not escalated to an ADR.** ADR 0003's narrow-return decision is upheld; only its recorded cost changes.
+
+**This spec no longer contains an open question** — for the seventh time. Each pass applies pressure the last could not: §10.1–§10.4 came from consolidating eight ADRs, §10.5 from reading the spec as a builder, §10.6 from *being* one, §10.7 from **retroing shipped, green, reviewed code**, §10.8 from **checking that retro's own sources against the primary record**, §10.9 from **four independent lenses over the same seam at once**, and §10.10 from **picking up the finding a retro had itself deferred as low-severity**. Treat "no open questions" as a claim with a short half-life, not a property.
 
 The half-life got shorter, and §10.8 is the sharpest demonstration this document has. **§10.7 was written and green on the same day §10.8 refuted a load-bearing sentence in it** — an ecosystem claim about nine libraries, asserted from a survey nobody had checked against the source. §10.6 earned the rule *"an erratum's blast radius is a claim, not an observation"*; §10.7 restated it and then violated it in its own prose. The corrected version is narrower and more useful: it turned up an option (`then` + `catch`) that the wrong version had defined out of existence. **Cite the source, not the summary — including when the summary is your own and an hour old.**
 

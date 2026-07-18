@@ -118,7 +118,7 @@ export function combineWithAllErrors<
  * already accepted no longer breaks at `partition`. Nothing here mutates the
  * input.
  */
-export function partition<T, E>(results: readonly Result<T, E>[]): [T[], E[]] {
+export function partition<T, E = never>(results: readonly Result<T, E>[]): [T[], E[]] {
   const values: T[] = [];
   const errors: E[] = [];
 

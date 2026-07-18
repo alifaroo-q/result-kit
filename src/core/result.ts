@@ -75,6 +75,19 @@ export type ErrTypeOf<R extends Result<unknown, unknown>> =
  *
  * Returns the **narrow** `Ok<T>` rather than `Result<T, never>` — strictly more
  * precise, and it still assigns into any `Result<T, E>` annotation.
+ *
+ * Both clauses are true of this value and **neither survives a transform**
+ * (§10.10). `Ok<T>` has no `Err` member, so it offers `E` no inference site: a
+ * transform over a bare `ok(1)` had nothing to infer `E` from, fell back to
+ * `unknown`, and `Result<T, unknown>` assigns into *no* `Result<T, E>`
+ * annotation. The note described a property of the constructor and read as a
+ * property of the value, overstating itself by exactly the step that matters.
+ *
+ * The narrow return is still the right call; it simply is not free, and the cost
+ * is paid one hop away. `E` now defaults to `never` wherever it reaches a
+ * user-visible position, which is the honest answer — a value built by `ok(1)`
+ * genuinely has no error channel — and restores the second clause past the first
+ * transform.
  */
 export function ok(): Ok<void>;
 export function ok<T>(value: T): Ok<T>;
