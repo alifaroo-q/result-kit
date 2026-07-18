@@ -178,9 +178,14 @@ export class ResultChain<T, E> {
    * failure. No amount of arm *ordering* fixed that — the information simply is
    * not there at runtime.
    *
-   * What remains is sound by construction rather than by detection: a settled
-   * input and a guarded callback cannot produce a promise, so there is nothing
-   * to sniff and no branch on which the answer can differ.
+   * What remains is sound by two separate means, and §10.9 originally claimed
+   * only the first while asserting both. A thenable-returning callback is now
+   * **typed honestly** rather than rejected, so the return type admits the
+   * `ResultAsync` the runtime can produce; and a thenable-carrying *input* —
+   * which §2's brandless union permits — is read as the settled `Result` it is,
+   * by `isSettledResult`. `wrap()` reads whichever the core produced. Nothing
+   * here is "sound by construction"; it is sound by two checks that were each
+   * verified to fire.
    */
   map<U>(
     fn: (value: T) => U,
