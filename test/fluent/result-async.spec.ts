@@ -275,6 +275,7 @@ describe('ResultAsync chaining members', () => {
 
   it('theHeroPath_isOneAwaitAtTheFrontAndATerminalAtTheEnd', async () => {
     const displayName = await ok(user)
+      .toAsync()
       .andThen(async (u): Promise<Result<User, Forbidden>> => coreOk(u))
       .map((u) => u.credit)
       .match({ ok: (c) => `credit ${c}`, err: () => 'anon' });
@@ -283,11 +284,33 @@ describe('ResultAsync chaining members', () => {
   });
 });
 
+/**
+ * §10.9 made this seam **explicit**. It used to be implicit — an async callback
+ * on a `ResultChain` returned a `ResultAsync` — and that was silently wrong on
+ * the short-circuit branch: the wrapper decided by inspecting what the callback
+ * returned, and on an `Err` the callback never runs, so `err.map(async …)` was
+ * declared `ResultAsync` and handed back a `ResultChain`. `await` then yielded
+ * the wrapper itself and a success read as a failure.
+ */
 describe('the ResultChain → ResultAsync seam', () => {
-  it('map_withAnAsyncCallback_crossesToResultAsync', () => {
-    const ra = from(okUser()).map(async (u) => u.credit);
+  it('map_withAnAsyncCallback_isRejected', () => {
+    // @ts-expect-error - cross with .toAsync() first
+    from(okUser()).map(async (u) => u.credit);
+  });
+
+  it('map_withAnAsyncCallback_crossesToResultAsyncViaToAsync', () => {
+    const ra = from(okUser()).toAsync().map(async (u) => u.credit);
 
     expectTypeOf(ra).toEqualTypeOf<ResultAsync<number, NotFound>>();
+  });
+
+  it('toAsync_onTheErrBranch_isStillAResultAsync', async () => {
+    // The branch the implicit seam got wrong: it returned a ResultChain here,
+    // typed as a ResultAsync, so `.ok` read `undefined` off the wrapper.
+    const ra = from(errUser()).toAsync().map((u) => u.credit);
+
+    expectTypeOf(ra).toEqualTypeOf<ResultAsync<number, NotFound>>();
+    await expect(ra.toResult()).resolves.toEqual(coreErr(notFound));
   });
 
   it('map_withASyncCallback_staysAResultChain', () => {
@@ -306,8 +329,13 @@ describe('the ResultChain → ResultAsync seam', () => {
    * a sync-first order accepts an async tee **silently**, drops the `await`, and
    * returns a `ResultChain` that settled before the tee ran.
    */
-  it('inspect_withAnAsyncCallback_crossesToResultAsyncRatherThanBeingSwallowed', () => {
-    const ra = from(okUser()).inspect(async () => {});
+  it('inspect_withAnAsyncCallback_isRejectedRatherThanSwallowed', () => {
+    // @ts-expect-error - the void-return rule would otherwise hide this
+    from(okUser()).inspect(async () => {});
+  });
+
+  it('inspect_withAnAsyncCallback_crossesToResultAsyncViaToAsync', () => {
+    const ra = from(okUser()).toAsync().inspect(async () => {});
 
     expectTypeOf(ra).toEqualTypeOf<ResultAsync<User, NotFound>>();
   });
@@ -316,6 +344,7 @@ describe('the ResultChain → ResultAsync seam', () => {
     const order: string[] = [];
 
     await from(okUser())
+      .toAsync()
       .inspect(async () => {
         await Promise.resolve();
         order.push('tee');
@@ -327,7 +356,7 @@ describe('the ResultChain → ResultAsync seam', () => {
   });
 
   it('andThen_withAnAsyncCallback_crossesToResultAsync', async () => {
-    const ra = from(okUser()).andThen(
+    const ra = from(okUser()).toAsync().andThen(
       async (u): Promise<Result<number, Forbidden>> => coreOk(u.credit),
     );
 
@@ -544,12 +573,47 @@ describe('the /fluent async constructors (§6.3 as amended, §10.5)', () => {
    * choice but to import from root.
    */
   it('fromPromise_andResultAsyncFrom_takeDifferentInputsAndAreNotInterchangeable', () => {
+    // Both take PromiseLike (§10.9), matching §5.2 — but the *shapes* differ,
+    // which is the point: a raw value vs. one already in the result world.
     expectTypeOf(fromPromise<User, NotFound>)
       .parameter(0)
-      .toEqualTypeOf<Promise<User>>();
+      .toEqualTypeOf<PromiseLike<User>>();
 
     expectTypeOf(ResultAsync.from<User, NotFound>)
       .parameter(0)
-      .toEqualTypeOf<Promise<Result<User, NotFound>>>();
+      .toEqualTypeOf<PromiseLike<Result<User, NotFound>>>();
+  });
+
+  it('inspect_acceptsAValueReturningTee_matchingTheCoreArm', async () => {
+    // §10.9 finding 6: the tee arms took `void | Promise<void>`, so even the
+    // ordinary sync `arr.push(u)` was rejected — the void-return rule does not
+    // fire for a union containing void. The core's arms always took `unknown`.
+    const seen: number[] = [];
+    const out = from(okUser())
+      .toAsync()
+      .inspect((u) => seen.push(u.credit));
+
+    await expect(out.toResult()).resolves.toEqual(coreOk(user));
+    expect(seen).toEqual([10]);
+  });
+
+  it('resultAsyncFrom_acceptsAResultAsync_whichImplementsPromiseLike', async () => {
+    // The narrow `Promise` parameter rejected this class's own instances, though
+    // the runtime handled them: ResultAsync implements PromiseLike, not Promise.
+    const inner = from(okUser()).toAsync();
+
+    await expect(ResultAsync.from(inner).toResult()).resolves.toEqual(
+      coreOk(user),
+    );
+  });
+
+  it('fromPromise_acceptsABareThenable', async () => {
+    const thenable: PromiseLike<number> = {
+      then: (onFulfilled) => Promise.resolve(42).then(onFulfilled),
+    };
+
+    await expect(fromPromise(thenable, () => notFound)).resolves.toEqual(
+      coreOk(42),
+    );
   });
 });

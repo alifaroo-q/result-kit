@@ -336,3 +336,63 @@ describe('ResultChain exits', () => {
     expect(parsed).toEqual(ok(user).toResult());
   });
 });
+
+/**
+ * The #36 defect, mirrored (spec §10.7). The wrapper delegates to the core, so
+ * it inherited the core's hole: a `U | Promise<U>` callback matched the sync arm
+ * and tsc promised a `ResultChain` while the runtime handed back a
+ * `ResultAsync` — leaving `.toResult()` a `Promise` where a `Result` was
+ * guaranteed.
+ */
+const seenSink: number[] = [];
+const creditCache = new Map<string, number>();
+const fetchCredit = async (_id: string): Promise<number> => 10;
+/** Returns `number | Promise<number>` — neither purely sync nor purely async. */
+const lookupCredit = (id: string) => creditCache.get(id) ?? fetchCredit(id);
+
+describe('ResultChain and the mixed value-or-promise callback (#36)', () => {
+  it('rejects it in map, rather than returning a ResultAsync typed as a ResultChain', () => {
+    // @ts-expect-error - a `U | Promise<U>` callback must not match the sync arm
+    ok(user).map((u) => lookupCredit(String(u.credit)));
+  });
+
+  it('rejects it in mapErr', () => {
+    // @ts-expect-error - see above
+    from(errUser()).mapErr((e) => lookupCredit(e.id));
+  });
+
+  it('rejects it in inspect', () => {
+    // @ts-expect-error - see above
+    ok(user).inspect((u) => lookupCredit(String(u.credit)));
+  });
+
+  it('rejects it in inspectErr', () => {
+    // @ts-expect-error - see above
+    from(errUser()).inspectErr((e) => lookupCredit(e.id));
+  });
+
+  it('still returns a ResultChain for an ordinary value-returning sync callback', () => {
+    // The guard must cost nothing here: no extra argument, same resolved type.
+    expectTypeOf(ok(user).map((u) => u.credit)).toEqualTypeOf<
+      ResultChain<number, never>
+    >();
+  });
+
+  it('accepts an async tee whose callback returns a value, once across the seam', async () => {
+    // `async u => log(u)` is a Promise<X>, not a Promise<void>. Capturing the
+    // return type is what lets the guard see it at all; crossing with toAsync()
+    // is what makes awaiting it sound on both branches.
+    const seen: number[] = [];
+    const out = ok(user)
+      .toAsync()
+      .inspect(async (u) => seen.push(u.credit));
+
+    await expect(out.toResult()).resolves.toEqual(coreOk(user));
+    expect(seen).toEqual([10]);
+  });
+
+  it('rejects an async tee on the sync surface', () => {
+    // @ts-expect-error - §10.9: cross with .toAsync() first
+    ok(user).inspect(async (u) => seenSink.push(u.credit));
+  });
+});

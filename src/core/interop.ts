@@ -129,9 +129,15 @@ export function fromThrowable<Args extends unknown[], T, E>(
  *
  * Returns a plain `Promise<Result<T, E>>`: `await` it and you hold ordinary
  * data. No wrapper, no new async type — spec §4's self-sufficiency invariant.
+ *
+ * Accepts `PromiseLike<T>`, not `Promise<T>` (§10.9). The `await` inside has
+ * always handled any thenable — the narrower parameter was rejecting values the
+ * implementation ran correctly, and it disagreed with §5.2, which takes
+ * `PromiseLike` throughout for §10.6's cross-realm reason. A pure widening:
+ * every `Promise` is a `PromiseLike`, so no existing call site is lost.
  */
 export async function fromPromise<T, E>(
-  promise: Promise<T>,
+  promise: PromiseLike<T>,
   onReject: (error: unknown) => E,
 ): Promise<Result<T, E>> {
   try {

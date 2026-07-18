@@ -4,6 +4,7 @@ import {
   type Result,
 } from '../core/result';
 import { isThenable } from '../core/thenable';
+import type { NoThenableReturn } from '../core/thenable';
 import {
   match as coreMatch,
   toNullable as coreToNullable,
@@ -23,26 +24,53 @@ import {
 import { ResultAsync } from './result-async';
 
 /**
- * Re-wraps whatever a core transform handed back into the matching envelope.
+ * What the four guarded core transforms return **for the calls this class makes**
+ * — always a settled `Result`, never a promise.
  *
- * The core already decided sync-vs-async — it detects a thenable and returns a
- * `Promise` or a plain `Result` accordingly — so this reads that decision rather
- * than making a second one. Delegation, still: the branch here mirrors the
- * core's, it does not duplicate its logic.
+ * That is a stronger statement than it was before §10.9, and it is now true by
+ * construction rather than by convention: every member below rejects a
+ * thenable-returning callback via `NoThenableReturn`, and the input is always
+ * this instance's settled `#result`. Neither the input nor the output can be
+ * asynchronous, so there is nothing left to sniff. The `wrap()` helper that used
+ * to re-detect it is gone — it was the thing that made the sync→async seam
+ * silently wrong on the short-circuit branch, because a callback that never runs
+ * produces no thenable to detect.
  */
-function wrap<U, F>(
-  out: Result<U, F> | Promise<Result<U, F>>,
-): ResultChain<U, F> | ResultAsync<U, F> {
-  return isThenable(out) ? ResultAsync.from(out) : new ResultChain(out);
-}
+type Settled<U, F> = Result<U, F>;
 
 /**
- * What a core transform *actually* returns for a callback that may be either
- * sync or async — which its own overloads deliberately never say, because they
- * are written for a caller who knows at the call site. The wrapper does not, so
- * it re-states the union once, here, instead of casting at six sites.
+ * The four guarded core transforms, re-typed **without** §10.7's
+ * `NoThenableReturn` rest parameter — and for a mechanical reason, not to opt out
+ * of the guard.
+ *
+ * The guard is a conditional over the callback's return type. Inside these
+ * generic members that type is still an unresolved type *parameter*, so TS
+ * cannot reduce the conditional to the empty tuple, the guarded arm stops
+ * matching, and the call falls through to the promise-input arm. The guard
+ * exists to protect **call sites**, and `ResultChain` re-declares it on its own
+ * public arms below — where `U` *is* resolved, because a user supplied the
+ * callback. This delegation is not a call site any consumer can reach: it is
+ * already fully cast, and `#result` is native-private.
+ *
+ * Stated once here for the same reason {@link Settled} is: better one explained
+ * alias than four unexplained casts.
  */
-type Settled<U, F> = Result<U, F> | Promise<Result<U, F>>;
+const mapUnguarded = coreMap as unknown as <T, U, E>(
+  result: Result<T, E>,
+  fn: (value: T) => U,
+) => Settled<U, E>;
+const mapErrUnguarded = coreMapErr as unknown as <T, E, F>(
+  result: Result<T, E>,
+  fn: (error: E) => F,
+) => Settled<T, F>;
+const inspectUnguarded = coreInspect as unknown as <T, E>(
+  result: Result<T, E>,
+  fn: (value: T) => unknown,
+) => Settled<T, E>;
+const inspectErrUnguarded = coreInspectErr as unknown as <T, E>(
+  result: Result<T, E>,
+  fn: (error: E) => unknown,
+) => Settled<T, E>;
 
 /**
  * The sync fluent wrapper (spec §6.1) — **the documented hero** of 5.0.0.
@@ -78,15 +106,25 @@ type Settled<U, F> = Result<U, F> | Promise<Result<U, F>>;
  */
 export class ResultChain<T, E> {
   /**
-   * Native-private, so the envelope cannot be picked apart or impersonated.
-   * `.toResult()` is the only way out — which is what makes rule 1 enforceable
-   * rather than aspirational.
+   * Native-private, so the envelope cannot be picked apart or impersonated by a
+   * structural look-alike. `.toResult()` is the only way out — which is what
+   * makes rule 1 enforceable rather than aspirational. See the constructor note
+   * for what this does *not* claim.
    */
   readonly #result: Result<T, E>;
 
   /**
-   * @internal Not part of the §6.3 surface. `ResultChain` is exported as a type,
-   * so no consumer can reach this — instances come from `ok` / `err` / `from`.
+   * @internal Not part of the §6.3 surface. `ResultChain` is exported as a
+   * **type**, so the name is not importable and instances come from `ok` /
+   * `err` / `from`.
+   *
+   * That is a hiding, not a gate, and an earlier version of this note overstated
+   * it as "no consumer can reach this" (§10.9). The constructor is still
+   * reachable at runtime — `new (ok(1).constructor)(someResult)` builds a
+   * working instance. What the native-private `#result` *does* guarantee is that
+   * an instance cannot be **impersonated** by a look-alike object: every member
+   * throws on a foreign receiver. Forging one requires the real constructor and
+   * yields a genuine, well-formed wrapper, so it buys an attacker nothing.
    */
   constructor(result: Result<T, E>) {
     this.#result = result;
@@ -95,100 +133,77 @@ export class ResultChain<T, E> {
   /**
    * Transforms the value of an `Ok`, passing an `Err` through untouched.
    *
-   * An **async callback returns a `ResultAsync`** — the seam onto §6.2's
-   * surface, and the reason a chain can start sync and go async mid-flight
-   * without the caller re-entering anything.
+   * **Synchronous only.** An async callback is a compile error; cross to §6.2's
+   * surface with {@link ResultChain.toAsync} first.
    *
    * @remarks
-   * **The async arm is declared first on every member below, and the order is
-   * load-bearing** — the same trap §5.2 hit, one rung up. TypeScript takes the
-   * *first* overload that matches, and a sync-first order captures an async
-   * callback in the sync arm with `U = Promise<X>`, handing back
-   * `ResultChain<Promise<X>, E>`: a wrapper around an un-awaited promise, typed
-   * confidently, with the `await` dropped. `inspect` is worse still, because
-   * `() => Promise<void>` satisfies `() => void` under the void-return rule, so
-   * the sync arm accepts it silently. Both typecheck at the definition; only an
-   * assertion on the resolved return type separates them, which is why
-   * `test/fluent/result-async.spec.ts` (the seam suite — that is where both
-   * sides of each arm are visible) pins them, and why swapping either order is
-   * verified to redden `pnpm check`.
+   * Every member of this class used to carry a second, async-callback arm
+   * returning a `ResultAsync` — the implicit sync→async seam. **§10.9 removed
+   * all six**, because the wrapper decided sync-vs-async by inspecting what the
+   * callback returned, and on the short-circuit branch the callback never runs:
+   * `err.map(async …)` was declared `ResultAsync` and handed back a
+   * `ResultChain`, so `await` yielded the wrapper itself and a success read as a
+   * failure. No amount of arm *ordering* fixed that — the information simply is
+   * not there at runtime.
+   *
+   * What remains is sound by construction rather than by detection: a settled
+   * input and a guarded callback cannot produce a promise, so there is nothing
+   * to sniff and no branch on which the answer can differ.
    */
-  map<U>(fn: (value: T) => PromiseLike<U>): ResultAsync<U, E>;
-  map<U>(fn: (value: T) => U): ResultChain<U, E>;
   map<U>(
-    fn: (value: T) => U | PromiseLike<U>,
-  ): ResultChain<U, E> | ResultAsync<U, E> {
-    return wrap(
-      coreMap(this.#result, fn as (value: T) => U) as Settled<U, E>,
-    );
+    fn: (value: T) => U,
+    ...reject: NoThenableReturn<U>
+  ): ResultChain<U, E> {
+    return new ResultChain(mapUnguarded(this.#result, fn));
   }
 
   /** Transforms the error of an `Err`, passing an `Ok` through untouched. */
-  mapErr<F>(fn: (error: E) => PromiseLike<F>): ResultAsync<T, F>;
-  mapErr<F>(fn: (error: E) => F): ResultChain<T, F>;
   mapErr<F>(
-    fn: (error: E) => F | PromiseLike<F>,
-  ): ResultChain<T, F> | ResultAsync<T, F> {
-    return wrap(
-      coreMapErr(this.#result, fn as (error: E) => F) as Settled<T, F>,
-    );
+    fn: (error: E) => F,
+    ...reject: NoThenableReturn<F>
+  ): ResultChain<T, F> {
+    return new ResultChain(mapErrUnguarded(this.#result, fn));
   }
 
   /**
    * Chains a fallible step onto an `Ok`, accumulating the error channel to
    * `E | F` — the same rule the core `andThen` uses.
    */
-  andThen<U, F>(
-    fn: (value: T) => PromiseLike<Result<U, F>>,
-  ): ResultAsync<U, E | F>;
-  andThen<U, F>(fn: (value: T) => Result<U, F>): ResultChain<U, E | F>;
-  andThen<U, F>(
-    fn: (value: T) => Result<U, F> | PromiseLike<Result<U, F>>,
-  ): ResultChain<U, E | F> | ResultAsync<U, E | F> {
-    return wrap(
-      coreAndThen(this.#result, fn as (value: T) => Result<U, F>) as Settled<
-        U,
-        E | F
-      >,
-    );
+  andThen<U, F>(fn: (value: T) => Result<U, F>): ResultChain<U, E | F> {
+    return new ResultChain(coreAndThen(this.#result, fn));
   }
 
   /** Recovers from an `Err`, accumulating the success channel to `T | U`. */
-  orElse<U, F>(
-    fn: (error: E) => PromiseLike<Result<U, F>>,
-  ): ResultAsync<T | U, F>;
-  orElse<U, F>(fn: (error: E) => Result<U, F>): ResultChain<T | U, F>;
-  orElse<U, F>(
-    fn: (error: E) => Result<U, F> | PromiseLike<Result<U, F>>,
-  ): ResultChain<T | U, F> | ResultAsync<T | U, F> {
-    return wrap(
-      coreOrElse(this.#result, fn as (error: E) => Result<U, F>) as Settled<
-        T | U,
-        F
-      >,
-    );
+  orElse<U, F>(fn: (error: E) => Result<U, F>): ResultChain<T | U, F> {
+    return new ResultChain(coreOrElse(this.#result, fn));
   }
 
-  /** Tees the value of an `Ok` for a side effect, returning it unchanged. */
-  inspect(fn: (value: T) => PromiseLike<void>): ResultAsync<T, E>;
-  inspect(fn: (value: T) => void): ResultChain<T, E>;
-  inspect(
-    fn: (value: T) => void | PromiseLike<void>,
-  ): ResultChain<T, E> | ResultAsync<T, E> {
-    return wrap(
-      coreInspect(this.#result, fn as (value: T) => void) as Settled<T, E>,
-    );
+  /**
+   * Tees the value of an `Ok` for a side effect, returning it unchanged.
+   *
+   * @remarks
+   * `R` captures the callback's return type rather than discarding it as `void`,
+   * which is what lets `NoThenableReturn` see a promise at all — under a plain
+   * `=> void` arm the void-return rule silently accepted `async (u) => log(u)`
+   * and floated it unawaited. An ordinary value-returning tee like
+   * `(u) => arr.push(u)` is still accepted; only a thenable return is rejected.
+   */
+  inspect<R>(
+    fn: (value: T) => R,
+    ...reject: NoThenableReturn<R>
+  ): ResultChain<T, E> {
+    return new ResultChain(inspectUnguarded(this.#result, fn));
   }
 
-  /** Tees the error of an `Err` for a side effect, returning it unchanged. */
-  inspectErr(fn: (error: E) => PromiseLike<void>): ResultAsync<T, E>;
-  inspectErr(fn: (error: E) => void): ResultChain<T, E>;
-  inspectErr(
-    fn: (error: E) => void | PromiseLike<void>,
-  ): ResultChain<T, E> | ResultAsync<T, E> {
-    return wrap(
-      coreInspectErr(this.#result, fn as (error: E) => void) as Settled<T, E>,
-    );
+  /**
+   * Tees the error of an `Err` for a side effect, returning it unchanged. The
+   * mirror of {@link ResultChain.inspect}; the same arm note applies.
+   */
+  inspectErr<R>(
+    fn: (error: E) => R,
+    ...reject: NoThenableReturn<R>
+  ): ResultChain<T, E> {
+    return new ResultChain(inspectErrUnguarded(this.#result, fn));
   }
 
   /**
@@ -257,6 +272,35 @@ export class ResultChain<T, E> {
    */
   toResult(): Result<T, E> {
     return this.#result;
+  }
+
+  /**
+   * Crosses to the async surface (§6.2) — **the sync→async seam, made explicit**
+   * (§10.9).
+   *
+   * The seam used to be implicit: passing an async callback to `.map()` returned
+   * a `ResultAsync`. That was silently wrong on the short-circuit branch. The
+   * wrapper decided sync-vs-async by inspecting what the callback returned, and
+   * on an `Err` the callback never runs — so `err.map(async …)` was declared
+   * `ResultAsync` and handed back a `ResultChain`. Awaiting a non-thenable
+   * yields the object itself, so callers read `.ok` off the wrapper as
+   * `undefined` and a success was reported as a failure. Data-dependent, no
+   * throw: §10.6's signature failure.
+   *
+   * The rule that replaced it: **a settled input cannot produce an asynchronous
+   * output.** Async work starts from a promise, and this is how you get one —
+   * after which every `ResultAsync` member is sound, because its input is always
+   * a promise and its output is a promise on both branches.
+   *
+   * ```ts
+   * ok(user).map(charge).toAsync().andThen(saveRemote).match({ ok, err });
+   * ```
+   *
+   * Lossless and total: it wraps the settled `Result` this instance already
+   * holds, so it cannot fail and adds one microtask, not a round trip.
+   */
+  toAsync(): ResultAsync<T, E> {
+    return ResultAsync.from(Promise.resolve(this.#result));
   }
 
   /**
