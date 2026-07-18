@@ -66,10 +66,11 @@ Type and value namespaces are separate, so the `Ok<T>` **type** and the `ok` **c
 
 > If `T` and `E` are JSON-serializable, then `JSON.parse(JSON.stringify(result))` is a valid, structurally-identical `Result<T, E>`, consumable with **no** re-wrapping.
 
-A `Result` may therefore be an HTTP response body, a queue message, or a `postMessage` payload. Two carve-outs must be documented alongside the guarantee:
+A `Result` may therefore be an HTTP response body, a queue message, or a `postMessage` payload. **Three** carve-outs must be documented alongside the guarantee:
 
 - **`cause`** ([ADR 0002 §3](../adr/0002-v2-typederror-model.md)). When `error` is a `TypedError`, `{ type, message, details }` is JSON-safe but a populated `cause?: unknown` may not be. **The caller sanitizes or drops `cause` before serializing.** The core never silently mutates error data to auto-strip it.
 - **`.toResult()`-before-serialize** ([ADR 0003 §5](../adr/0003-v2-result-type-shape.md)). Never `JSON.stringify` a `ResultChain` or `ResultAsync`. Exit to the plain union first. `ResultChain.toJSON()` (§6.1) makes the mistake lossless, but the *documented* path stays explicit.
+- **`Ok<void>` is consumable, not structurally identical** (§10.9). `ok()` — the form §5.1 recommends over `ok(undefined)` — serializes to `{"ok":true}`, because `undefined` is not JSON-serializable and `JSON.stringify` drops the key. It round-trips to a **one-field** object, which contradicts §2's "exactly two fields per half". It stays fully consumable (`.value` reads `undefined` either way, `isOk` works, nothing re-wraps), so the guarantee's practical intent holds — but the word *structurally-identical* does not, and this carve-out went undocumented until a pre-freeze retro measured it. Strictly, `Ok<void>` sits outside the antecedent, since `void` is not JSON-serializable; the guarantee never said so, while §5.1 recommends the constructor that produces it.
 
 ## 3. `TypedError` and `defineError`
 
@@ -849,7 +850,119 @@ The deeper reason: `await` and `Promise.resolve` are **defined** on thenables, n
 >
 > The general lesson, which §10.6 already earned once from the other direction: **an erratum's blast radius is a claim, not an observation.** This note asserted a scope ("`safeUnwrap` has the identical hole") that nobody had gone and measured, and it was wrong by one function in a two-function module. When recording that a bug class exists, grep the class.
 
-**This spec no longer contains an open question** — for the third time. Each pass applies pressure the last could not: §10.1–§10.4 came from consolidating eight ADRs, §10.5 from reading the spec as a builder, §10.6 from *being* one. Treat "no open questions" as a claim with a short half-life, not a property.
+### 10.7 The mixed value-or-promise callback is rejected; the non-promise thenable is documented — **decided (2026-07-18, at retro)**
+
+Found in a retro of #26–#29 ([#36](https://github.com/alifarooq-zk/result-kit/issues/36)), both reproduced against `src` and a fresh `dist` before being written down. Neither defect is in that range's new code — both live in §5.2 and in §10.6's check — but they freeze into the API at 5.0.0 and one fix is signature-level, so deferring was breaking.
+
+**One root cause, not two.** §10.6 widened the runtime check to `typeof x?.then === 'function'`, and **that decision stands.** But the check is strictly *broader* than TypeScript's static notion of awaitable, and §10.6 never reconciled the two. Every value in that gap is typed one way and executed the other.
+
+**The mixed callback — rejected at compile time.** A callback returning `U | Promise<U>` matched §5.2's *sync* arm with `U` = the whole union:
+
+```ts
+const lookup = (id: number) => cache.get(id) ?? fetchName(id);  // string | Promise<string>
+map(ok(7), lookup);
+// tsc:     Result<string | Promise<string>, unknown>   ← a settled Result
+// runtime: a Promise on a cache miss  →  .ok undefined  →  err branch silently taken
+```
+
+Data-dependent, so the same call site is correct on a cache hit and silently wrong on a miss — §10.6's own signature failure, *a wrong value with a confident type and no throw*. It also contradicted `transforms.ts`'s documented invariant that the arms are mutually exclusive: true for purely-sync and purely-async callbacks, and a union callback is neither. Only `map` / `mapErr` / `inspect` / `inspectErr` were affected; `andThen`, `orElse`, and `safeUnwrap` demand a `Result` on their sync arm and always rejected the union loudly. **Half the surface said no; half lied quietly.** The four now agree, via a `NoMixedThenable<U>` rest parameter in `src/core/thenable.ts`, mirrored on `ResultChain`.
+
+The encoding matters and is the reason this needed design rather than a patch. `U extends PromiseLike<unknown> ? never : U` on the *parameter* does not work — a conditional type is not an inference site, so `U` collapses to `unknown` and every call site degrades. Spreading the conditional as a **rest parameter** keeps `U` in a naked inference position and evaluates the check only after `U` is known: when `U` holds no thenable it reduces to `[]` and the resolved signature is byte-identical, so correct code pays nothing. The *promise-input* arms deliberately still accept the union — §5.2 grants them that shape and the returned promise flattens it — though their value type is now `Awaited<U>`, which is what they always returned.
+
+- **Rejected — type it honestly** as `Result<Awaited<U>, E> | Promise<Result<Awaited<U>, E>>`. Truthful, since the outcome genuinely is data-dependent, and nothing that compiles today stops compiling. But it pushes a union onto every affected call site and exports the confusion rather than resolving it, while the loud rejection has an obvious fix: mark the callback `async`.
+- **Rejected — narrow the runtime check to match TypeScript's notion.** Reopens §10.6's cross-realm hole. See below for why it is worse than it looks.
+
+**The non-promise thenable — documented, not fixed.** An object with a callable `then` that never invokes its callback (`{ tag: 'builder', then(next) { return this } }` — a workflow builder, not a promise) is assimilated by `Promise.resolve` and **deadlocks permanently**. TypeScript does not consider it awaitable, because its `then` returns no `PromiseLike`.
+
+**This is inherited from the language, not chosen.** `PromiseResolveThenableJob` branches on exactly one condition, `IsCallable(thenAction)`, so plain `await builder` hangs identically with no library involved. And it is **not fixable here**, for a reason specific to this package: every technique that excludes the builder — `util.types.isPromise`, `Object.prototype.toString`, a `Promise.prototype.then` brand probe — is a check for a **native** promise, and `ResultAsync` (§6.2) is not one. It is a hand-written class that `implements PromiseLike`. Each of those checks returns `false` for this package's own headline type, reintroducing §10.6's exact failure on the most common path there is: **a rare third-party false positive traded for a guaranteed false negative on our own surface.** Detecting the hang instead is undecidable — a legitimately slow thenable and a never-calling one are observationally identical at every finite observation time, so any timeout is a policy that eventually cancels valid work. Surveyed for this decision: effect, RxJS, zod, `@praha/byethrow`, `is-promise`, `p-is-promise`, Bluebird, neverthrow, fp-ts, core-js, promise-polyfill. **No consumer gates on a native brand.** But the first draft of this section also claimed none of them attempts to exclude a non-promise thenable, and **that was wrong**: `@praha/byethrow`, effect's `isPromise`, `p-is-promise`, and zod's data classifier all require **`then` *and* `catch`**, which would exclude the builder. That option is therefore live, and is declined on the same ground as the brand checks — `ResultAsync` implements `PromiseLike`, which is `then` alone, so requiring `catch` disowns our own type unless §6.2 grows one. Recorded as an open option in §10.8 rather than silently dropped.
+
+The blast radius is narrow: `isThenable` is never applied to arbitrary user data, only to a `Result`-typed input or the return of a user callback. `test/core/thenable.spec.ts` pins the *decision* rather than the deadlock — a test that waited on the hang could only observe a timeout, which is the same undecidability that makes it unfixable.
+
+- **Not escalated to an ADR.** Reverses no decision and corrects no misreading of one — §10.6's check is reaffirmed, and §5.2's shapes are unchanged. This closes a gap between the runtime check and the static types that the spec never reconciled. That is an erratum.
+- **A note on the retro that found it.** §10.6 closed by observing that the pass which asks "was that actually right?" has no ticket, and that **green is not the end of the loop.** This section exists because someone ran that pass anyway. Both defects predate #26–#29 and survived the building, the tests, and the type-level assertions — the union callback had *zero* test coverage, because §5.2 never specified that shape as accepted and so nobody thought to write one. **Untested is not the same as unreachable**, and `cache.get(id) ?? fetch(id)` is ordinary code.
+
+### 10.8 §10.6 re-examined before the freeze — **check widened, asymmetry upheld (2026-07-18)**
+
+§10.7 closed by noting that retro has no ticket. This section is a second one, run deliberately on §10.6 itself because 5.0.0 freezes the API permanently and §10.6 had already shipped one wrong-but-decisive argument (see the note at the end of §10.6). Three questions were put to primary sources — ECMA-262, Promises/A+, and the current source of eleven libraries — and instrumented on Node 24.
+
+**1. `isThenable` widened to accept a callable thenable — a real bug, fixed.** The check tested `typeof x === 'object'`, so a *function* carrying a `then` was disowned. The language assimilates it and Promises/A+ says "if `x` is an object **or function**"; verified: `await callable` unwraps, while `map(ok(1), () => callable)` returned a **synchronous** `Ok` wrapping the raw function — typed `Result<string>`, actually holding a `Function`. **That is §10.6's own failure mode re-entering through a different door**, which is precisely what §10.6's closing note warned to go looking for. One clause, no new obligation. Pinned in `test/core/thenable.spec.ts`.
+
+**2. Reading `then` once through `try`/`catch` (Promises/A+ 2.3.3.1) — rejected, and it is *regressive*.** The intuition is that capturing `then` removes a TOCTOU window. It does not, because every call site then hands the value to `Promise.resolve`, which reads `then` **again**: `PromiseResolve` short-circuits only when `IsPromise` holds *and* `Get(resolution, "constructor")` is `SameValue` as the constructor, so a userland `PromiseLike` always falls through to `CreateResolvingFunctions`' `Get(resolution, "then")`. Instrumented read counts confirm it — userland `PromiseLike`: **2 reads**; same-realm native promise: 1; **cross-realm promise: 2** (its `constructor` is the *other* realm's `Promise`, so `SameValue` fails and `Promise.resolve(foreign) !== foreign`). Capturing therefore buys exactly one thing — no synchronous throw escaping `map` — and **pays for it with the failure this spec exists to prevent**: a throwing getter would make the captured `then` `undefined`, the value would read as not-thenable, and `map` would silently return `ok(hostileObject)`. §10.6's own words are "a wrong value with a confident type." Trading a loud throw for that is a step backwards.
+
+**3. Invoking the captured `then` directly — rejected, on scope.** It is the only variant that delivers read-once (verified: 1 read), but bypassing `Promise.resolve` means implementing the resolution procedure ourselves: first-call-wins latching, throw-after-settle, recursive unwrapping, realm handling. That converts this package from a thenable **consumer** into a Promises/A+ **implementer**, permanently, in a frozen zero-dependency library — a large irreversible obligation bought to defend against a hostile accessor on a value the user's own callback returned. **The implement-vs-consume split is the whole answer**, and it is 9-for-9 in the survey: Bluebird, core-js, and promise-polyfill do the careful read and *implement* promises; no consumer does. A+ is scoped "by implementers, for implementers", and 2.3.3.2's remedy — "reject promise with `e`" — has no subject when you are not implementing one. **The clause does not bind us.** Classification: the synchronous throw is a genuine if exotic contract violation; the TOCTOU is pedantry; neither is a security issue, since the inspected value is the user's own callback return, in-process, same trust domain.
+
+**4. The §10.6 asymmetry — upheld, and it is the direction nobody else got right.** "Accept `PromiseLike`, return `Promise`" is Postel's law with both halves honest: the input takes the weaker requirement, the output makes the stronger promise, and the stronger promise is not a lie because `Promise.resolve` genuinely produces a native promise on every path, cross-realm included. Type-probed against the real source under `--strict`: both input forms accept, the output supports `.catch`/`.finally`, feeds back into `map`, and widens to `PromiseLike` for consumers. No `.d.ts` friction. **neverthrow is the only other promise-in/promise-out case and goes the opposite way** — `PromiseLike` in, `PromiseLike` **out** — discarding the native promise it actually produced, so `.catch`/`.finally` on its `ResultAsync` are type errors that work at runtime. The dangerous asymmetry is the reverse one, and we do not have it. Everyone else leaves the promise world entirely (RxJS → `Observable`, effect → `Effect`) or is `Promise`-on-both-sides (fp-ts, byethrow, zod).
+
+**5. Require `then` *and* `catch` — examined and closed, and the reason is general.** Raised because four surveyed libraries do exactly this, and it would exclude §10.7's builder. **Rejected: it reintroduces §10.6's bug.**
+
+The rule it violates is worth stating on its own, because it is the invariant this whole section keeps circling: **the runtime check must never be narrower than the published type.** `PromiseLike<T>` in TypeScript's own `lib.es5.d.ts` has exactly one member — `then`. So every signature in §5.2 that accepts `PromiseLike` is a published promise to handle a `then`-only thenable. A check requiring `catch` breaks that promise, and it breaks it *silently*:
+
+```ts
+const minimal = { then(r) { r(42) } };   // a PromiseLike<number>, and `await` unwraps it
+map(ok(1), () => minimal);
+// tsc:     Promise<Result<number, E>>   ← the async arm matched, PromiseLike<U>
+// runtime: a SYNC Result whose .value is the raw thenable
+```
+
+Verified by building `dist` with the `catch` clause in place. §10.6's failure mode exactly, and this time caused by a check that is *too narrow* rather than too broad.
+
+**`ResultAsync` was never the real objection** — an earlier draft of this bullet said it was, and said the fix was therefore additive later via a `catch` on §6.2. **That was wrong twice over.** `ResultAsync` is merely the most visible `then`-only thenable; giving it a `catch` would fix nothing, because every *other* minimal `PromiseLike` still breaks. The defect is in the relationship between the check and the signature, not in any one type.
+
+This also explains the four libraries cleanly, and dissolves the apparent disagreement: `@praha/byethrow`, zod, and `p-is-promise` publish **`Promise`** in their types, and every real `Promise` has a `catch` — their check matches their signature. Ours accepts `PromiseLike`, so ours must not. **They are not doing something we are declining to do; they are obeying the same rule from a different starting point.** Requiring `catch` would only ever be available to us by narrowing §5.2 to `Promise`, which would re-break the cross-realm and `ResultAsync` cases §10.6 exists to serve.
+
+§10.7's builder limitation therefore stands as documented — the option that appeared to narrow it was an illusion created by an unchecked ecosystem claim, and examining it properly produced the invariant above, which is worth more than the fix would have been.
+- **Not escalated to an ADR.** §10.6's decision is reaffirmed, not reversed; one clause of its check is corrected and its rationale is re-grounded in primary sources.
+
+### 10.9 A settled input cannot produce an asynchronous output — **decided (2026-07-18, at retro)**
+
+§10.8 was a retro of §10.6. This is a retro of the whole async/thenable seam, run before the freeze for the reason §10.7 gave: **green is not the end of the loop.** Four independent lenses were pointed at shipped, reviewed, passing code — type-vs-runtime correspondence, do-notation, the wrapper pair, and doc-claims-vs-code. Every one of them found something, and the largest finding was in code that three prior passes had already read.
+
+**The rule, which is the section's whole content:**
+
+> A transform whose input is a **settled `Result`** cannot promise an **asynchronous output**, because it may never call the callback at all.
+
+**1. The async-callback arm could not keep its promise (silent, worst of the set).** `map`/`mapErr`/`andThen`/`orElse`/`inspect`/`inspectErr` each had an arm taking a settled `Result` plus an async callback and returning `Promise<Result<…>>`. But the runtime decides sync-vs-async by *inspecting what the callback returned*, and on the short-circuit branch the callback never runs:
+
+```ts
+ferr('boom').map(async (v) => v)   // tsc: ResultAsync   runtime: ResultChain
+map(err('boom'), asyncFn)          // tsc: Promise<Result>   runtime: a plain Result
+```
+
+Awaiting a non-thenable yields the object itself, so the fluent case handed back the **wrapper**: `.ok` read `undefined`, `.error` read `undefined`, and a success was reported as a failure. The core case is milder — `await` masks it — but `.then`/`.catch`/`.finally`, all legal on the published type, throw `TypeError` on the error branch. Data-dependent, so the same call site is correct on one branch and silently wrong on the other. §10.6's signature failure, one rung up.
+
+**No arm ordering fixes this, and no runtime check can.** The information does not exist: `fn.constructor.name === 'AsyncFunction'` catches `async v => …` but not `v => api.get(v)`, and a partial fix makes the residue rarer and correspondingly harder to find. **All twelve arms are removed.** Async work now starts from a promise — `map(Promise.resolve(r), fn)` in the core, and a new **`ResultChain.toAsync()`** on the fluent surface — where the output is a promise on *every* branch. `NoMixedThenable` is renamed **`NoThenableReturn`** and now rejects any thenable-returning callback on a settled input, which is what catches these calls.
+
+The wrapper got *simpler*: each member collapsed from an overload pair to one signature, and **`wrap()` was deleted**. That helper was the defect — it re-derived a decision it had no evidence for. `Settled<U, F>` is now `Result<U, F>`, true by construction rather than by detection.
+
+- **Rejected — type it honestly** as `Result | Promise<Result>` / `ResultChain | ResultAsync`. Truthful and removes no capability, but pushes a union onto every async call site, including the ones correct today.
+- **Rejected — the `AsyncFunction` heuristic.** Knowingly partial; a rarer silent bug survives testing even better than this one did.
+- **What was actually lost** is the *implicit* mid-chain seam, and it never worked on the error branch. Removing a feature that worked half the time is not the same as removing a feature.
+
+**2. `isTypedError` and `ErrorCtor.is` (silent).** `isTypedError` gated on `typeof x !== 'object'`, so a **callable** carrying `type` and `message` — structurally a valid `TypedError`, assigned by tsc without complaint — was rejected. `unwrapOrThrow` consumes that guard, so it silently replaced the error's real message with the generic fallback. The identical `typeof` narrowing §10.8 fixed in `isThenable`; the second instance was missed because the erratum did not grep the class. **§10.6's lesson, unlearned twice now.** Separately, `.is()` checked only the tag while narrowing to `TypedError`, whose `message: string` is required — so a tag-only object passed and left `.message` `undefined` under a type asserting `string`. Both fixed; the payload disclaimer stands, since `message` is not payload.
+
+**3. `safeTry` stranded the generator (silent resource leak).** The short-circuit suspends the body at its first `yield` and never resumed it, so `finally` blocks never ran — cleanup executed on the **success** path and was skipped on the **error** path, which is the path cleanup exists for. `.return()` now closes it. The async generator needed more than the sync one: its `.return()` is itself async, so the result must `await` it or the `finally` runs *after* the caller's promise settles — the same leak one turn later.
+
+**4. `safeTry`'s return channel lost its union (loud).** The *yield* slot is a naked `Y` precisely so a union of `Err`s survives inference (implementation note 1). The *return* slot was `Result<T, E>` — not naked — so two distinct `return err(...)` exits gave `E` two candidates and the call failed to resolve at all. ADR 0007 §6 explicitly blesses a deliberate early `return err(...)`, and several of them is the ordinary shape; the existing test only ever used one. Now a naked `R`, decomposed by `ValueOf`/`ErrorOf`. The `never` defaults became **unnecessary rather than relocated**: `ErrorOf<Ok<T>>` derives `never` instead of asserting it.
+
+**5. The tee arms and the promise parameters were narrower than their own implementations (loud).** `ResultAsync.inspect`/`inspectErr` took `void | Promise<void>`, so even `arr.push(u)` was rejected — the void-return rule does not fire for a union containing `void` — while the core's arms had always taken `unknown`. And `fromPromise` / `ResultAsync.from` demanded a full `Promise` while §5.2 takes `PromiseLike` throughout; the second pointed at itself, since **`ResultAsync` implements `PromiseLike`, so `ResultAsync.from(ra)` failed to compile while working at runtime.** All widened. Pure widenings — every `Promise` is a `PromiseLike` — so no call site is lost.
+
+**6. `NoThenableReturn` false-positived on `any`.** `Extract<any, PromiseLike<unknown>>` is not `never`: a conditional over `any` takes both branches, so it reduces to `PromiseLike<unknown>` and the guard fired on **every** callback returning `any` — untyped JS callbacks, `vi.fn()` mocks, anything crossing an untyped boundary. Found only by running the change against the existing suite. An `IsAny` carve-out fixes it. Worth recording because the bug was in §10.7's guard as originally shipped, and would have frozen either way.
+
+**Doc claims refuted by this retro**, all corrected in place:
+
+- *"the check cannot misfire on the union"* (§10.6 and `thenable.ts`) — **false.** §2's purely-structural no-brand union means any `{ ok, value }` **is** an `Ok<T>`, including one carrying a `then`. Verified: `map(sneakyResult, syncFn)` deadlocks via the **input** path, with a purely synchronous callback. The no-brand invariant is precisely what makes the misfire possible, so the sentence was not merely wrong but backwards.
+- *"no consumer can reach this"* (`ResultChain`'s constructor) — **false.** The type-only export hides the name; it does not gate the runtime. `new (ok(1).constructor)(…)` forges a working instance.
+- *§2.1's "structurally-identical" JSON round-trip* — **overstated.** `ok()`, the form §5.1 recommends, round-trips to a one-field object, violating §2's "exactly two fields per half". Consumable, not identical; an undocumented third carve-out.
+- *§7.3's "this guard reads `dist/`, not `src/`"* — **half true.** Only the structural mechanism reads `dist/`; all five behavioural assertions import from `src/`, so they are blind to a packaging regression — the exact class of bug `CLAUDE.md` records for the missed `paths` entry.
+- *`isThenable` has "two callers"* — **three**, since #28 added `wrap()`. Now two again, because §10.9 deleted `wrap()`.
+
+**Cleared, and worth recording as covered:** collections (empty/sparse/non-array), `result.ts`, `fromNullable`/`fromPredicate`/`fromThrowable`/`fromThrowableAsync`, every documented identity claim (10/10 by `Object.is`), ADR 0009's full `ResultAsync` contract, error propagation across both wrappers, and §7.3's structural guard including its positive control.
+
+- **Not escalated to an ADR.** No decision is reversed: ADR 0005's "input drives output" is *upheld*, and this is what it actually entails — a settled input drives a settled output, always. ADR 0007's do-notation semantics are unchanged; §5.7's signatures now deliver what they always described.
+
+**This spec no longer contains an open question** — for the sixth time. Each pass applies pressure the last could not: §10.1–§10.4 came from consolidating eight ADRs, §10.5 from reading the spec as a builder, §10.6 from *being* one, §10.7 from **retroing shipped, green, reviewed code**, §10.8 from **checking that retro's own sources against the primary record**, and §10.9 from **four independent lenses over the same seam at once**. Treat "no open questions" as a claim with a short half-life, not a property.
+
+The half-life got shorter, and §10.8 is the sharpest demonstration this document has. **§10.7 was written and green on the same day §10.8 refuted a load-bearing sentence in it** — an ecosystem claim about nine libraries, asserted from a survey nobody had checked against the source. §10.6 earned the rule *"an erratum's blast radius is a claim, not an observation"*; §10.7 restated it and then violated it in its own prose. The corrected version is narrower and more useful: it turned up an option (`then` + `catch`) that the wrong version had defined out of existence. **Cite the source, not the summary — including when the summary is your own and an hour old.**
 
 **And a note on this section's own reliability**, earned the hard way. §10.6 shipped with a **wrong** decisive argument — a delegation requirement that §6.2 flatly contradicts, invented rather than verified, and caught only when someone asked "was that a good call?" *after* the code was green. The decision survived; the reasoning did not. Two things follow, and they cost nothing to state:
 
