@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { dirname, join, posix, relative, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -168,9 +169,44 @@ describe('the §7.3 fluent boundary — structural', () => {
   });
 });
 
-describe('the §7.3 fluent boundary — behavioural', () => {
+/**
+ * The behavioural assertions run against **both** the source tree and the built
+ * bundle, and running them twice is the point (§10.12).
+ *
+ * They used to import only `src/`, which proved the *source* boundary and left
+ * the *shipped* one uncovered — so a packaging regression that pulled the
+ * wrapper into the root bundle passed them. Demonstrated before fixing: with a
+ * `ResultChain` export bolted onto `dist/index.js`, all five stayed green, and
+ * they stayed green against a `dist/` that did not even parse.
+ *
+ * The structural mechanism reads `dist/`, but via **sourcemaps** — so it is
+ * blind in the mirror direction, to anything that changes the emitted bundle
+ * without changing the map. Neither mechanism subsumes the other, and neither
+ * covers both trees; only running these against both does.
+ *
+ * `src/` is kept rather than replaced: it fails earlier and more legibly on a
+ * source-level regression, and it does not depend on the build succeeding.
+ *
+ * **What the `dist` pass does and does not cover**, measured rather than
+ * assumed. It genuinely reads the emitted file — verified with a marker export
+ * that only exists in `dist/`, and by the wrapper-leak simulation above. It does
+ * **not** catch a bundle that fails to *link*: vitest's module runner is more
+ * permissive than Node's ESM linker, so an `export { Undefined }` bolted onto
+ * `dist/index.js` throws under plain `node` but imports fine here. That is an
+ * acceptable blind spot — a non-linking bundle is caught by `pnpm build`, by
+ * `publint`/`attw`, and by the first consumer to import it. The class this guard
+ * exists for is the silent one: a **valid** bundle whose contents are wrong.
+ */
+const SURFACES = [
+  { tree: 'src', load: () => import('../../src/index') },
+  { tree: 'dist', load: () => import(pathToFileURL(ROOT_ENTRY).href) },
+] as const;
+
+describe.each(SURFACES)(
+  'the §7.3 fluent boundary — behavioural ($tree)',
+  ({ load }) => {
   it('rootBarrel_exportsNoWrapper', async () => {
-    const surface = (await import('../../src/index')) as Record<string, unknown>;
+    const surface = (await load()) as Record<string, unknown>;
 
     for (const wrapper of WRAPPERS) {
       expect(surface).not.toHaveProperty(wrapper);
@@ -178,7 +214,7 @@ describe('the §7.3 fluent boundary — behavioural', () => {
   });
 
   it('rootBarrel_exportsNoValueThatIsAWrapperInstance', async () => {
-    const surface = (await import('../../src/index')) as Record<string, unknown>;
+    const surface = (await load()) as Record<string, unknown>;
 
     for (const value of Object.values(surface)) {
       expect(WRAPPERS).not.toContain(
@@ -195,7 +231,7 @@ describe('the §7.3 fluent boundary — behavioural', () => {
    * being wired to those by accident.
    */
   it('rootSafeTry_returnsPlainDataNotAWrapper', async () => {
-    const { ok, safeTry, safeUnwrap } = await import('../../src/index');
+    const { ok, safeTry, safeUnwrap } = await load();
 
     const result = safeTry(function* () {
       const value = yield* safeUnwrap(ok(1));
@@ -208,7 +244,7 @@ describe('the §7.3 fluent boundary — behavioural', () => {
   });
 
   it('rootSafeUnwrap_yieldsPlainDataNotAWrapper', async () => {
-    const { err, safeUnwrap } = await import('../../src/index');
+    const { err, safeUnwrap } = await load();
 
     const yielded = safeUnwrap(err('boom')).next().value;
 
@@ -217,9 +253,10 @@ describe('the §7.3 fluent boundary — behavioural', () => {
   });
 
   it('rootOkAndErr_returnPlainDataNotWrappers', async () => {
-    const { err, ok } = await import('../../src/index');
+    const { err, ok } = await load();
 
     expect(ok(1).constructor).toBe(Object);
     expect(err('boom').constructor).toBe(Object);
   });
-});
+  },
+);
