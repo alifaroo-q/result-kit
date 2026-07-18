@@ -1,5 +1,15 @@
 # @zireal/result-kit
 
+## 5.0.1
+
+### Patch Changes
+
+- 51b4912: Ship `MIGRATION.md` inside the published package.
+
+  `README.md` links to it as the upgrade path from 1.x, but `.npmignore` allowed only `dist/`, and npm's automatic inclusions cover just `README.md`, `LICENSE` and `package.json`. The link still resolves on npmjs.com, which rewrites relative links to the repository — so this was never broken for anyone browsing the registry. It was broken for anyone reading the installed package: `node_modules/@zireal/result-kit/MIGRATION.md` did not exist, on the one release where a migration guide matters most.
+
+  The tarball goes from 9 files to 10 (+17 kB). No code, types, or exports change.
+
 ## 5.0.0
 
 A complete rework: a plain, method-less `Result` union with a data-first free-function core, an opt-in fluent wrapper behind `@zireal/result-kit/fluent`, and zero runtime dependencies.
@@ -12,11 +22,11 @@ Because `2.0.0` no longer exists and cannot be created.
 
 The jump is not "the next free number", though. It is the only choice under which semver stays honest. Those versions were genuinely public for a few days, so anyone who installed one holds a `^2` / `^3` / `^4` range that their next install re-resolves:
 
-| Candidate | Does a stale `^2.0.0` resolve to it? | Verdict |
-|---|---|---|
-| `2.0.1` | **yes** — ships a total API rewrite as a *patch* | rejected |
-| `2.1.0` | **yes** — ships it as a *minor* | rejected |
-| **`5.0.0`** | **no** — above `^2`, `^3` and `^4` alike | **adopted** |
+| Candidate   | Does a stale `^2.0.0` resolve to it?             | Verdict     |
+| ----------- | ------------------------------------------------ | ----------- |
+| `2.0.1`     | **yes** — ships a total API rewrite as a _patch_ | rejected    |
+| `2.1.0`     | **yes** — ships it as a _minor_                  | rejected    |
+| **`5.0.0`** | **no** — above `^2`, `^3` and `^4` alike         | **adopted** |
 
 `5.0.0` is the only version that cannot silently land a rewrite inside someone's existing range.
 
@@ -25,10 +35,10 @@ The jump is not "the next free number", though. It is the only choice under whic
 - **ESM-only.** No CJS build ships. On CommonJS, use `require('@zireal/result-kit')` (Node 22.12+ supports requiring ESM) or `await import(...)`.
 - **Node `>=22.12`** (was `>=20`) and **TypeScript `>=6.0`**. `moduleResolution` must be `bundler`, `node16`, or `nodenext` — legacy `node` resolution cannot read the `exports` map.
 - **The core API is now free functions.** The static `ResultKit` toolbox and the `ResultPipeline` / `AsyncResultPipeline` classes are removed.
-- **Every `xAsync` double is gone.** The transforms take a value *or* a promise in one signature.
+- **Every `xAsync` double is gone.** The transforms take a value _or_ a promise in one signature.
 - **Three entrypoints removed:** `@zireal/result-kit/core` (its surface was identical to the root — change the specifier), plus `/fp-ts` and `/nest`, which ship no replacement.
 - **`fp-ts` and `@nestjs/common` are no longer dependencies.** If your own code imports `fp-ts`, add it yourself — it used to arrive transitively.
-- **⚠️ The `unwrapOrThrow` collision — this release's only *silent* breakage.** v1's `/nest` `unwrapOrThrow(result, options?)` threw a NestJS `HttpException`. The new core `unwrapOrThrow(result, message?)` throws a plain `Error`. Both take a `Result` first and an optional second argument, so **the name survives find-and-replace, still typechecks, and quietly stops producing HTTP responses** — a handled `404` becomes an unhandled `500`. Every other break here is loud. Grep for `unwrapOrThrow` before you ship.
+- **⚠️ The `unwrapOrThrow` collision — this release's only _silent_ breakage.** v1's `/nest` `unwrapOrThrow(result, options?)` threw a NestJS `HttpException`. The new core `unwrapOrThrow(result, message?)` throws a plain `Error`. Both take a `Result` first and an optional second argument, so **the name survives find-and-replace, still typechecks, and quietly stops producing HTTP responses** — a handled `404` becomes an unhandled `500`. Every other break here is loud. Grep for `unwrapOrThrow` before you ship.
 
 ### Added
 
