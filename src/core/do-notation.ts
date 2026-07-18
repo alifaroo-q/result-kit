@@ -1,4 +1,4 @@
-import type { Err, Result } from './result';
+import type { Err, Ok, Result } from './result';
 import { isThenable } from './thenable';
 
 /**
@@ -9,6 +9,15 @@ import { isThenable } from './thenable';
  * extracts from a `Result`, not from an `Err` union.
  */
 type ErrorOf<Y> = Y extends Err<infer E> ? E : never;
+
+/**
+ * The `Ok` half of the same decomposition — `ValueOf<Ok<T> | Err<E>>` is `T`.
+ *
+ * **Internal**, and distinct from the public `OkTypeOf` for the same reason
+ * {@link ErrorOf} is distinct from `ErrTypeOf`: this one distributes over a bare
+ * union of halves, which is what a naked return-slot parameter captures.
+ */
+type ValueOf<R> = R extends Ok<infer T> ? T : never;
 
 /**
  * Guards the one invariant `safeUnwrap`'s generators cannot express in types:
@@ -90,15 +99,19 @@ export function safeUnwrap<T, E>(
  * });
  * ```
  *
- * `Y` is a **naked** type parameter, and that is load-bearing — see the note on
- * the implementation below.
+ * `Y` and `R` are both **naked** type parameters, and that is load-bearing —
+ * see the note on the implementation below.
  */
-export function safeTry<Y extends Err<unknown>, T = never, E = never>(
-  body: () => Generator<Y, Result<T, E>>,
-): Result<T, E | ErrorOf<Y>>;
-export function safeTry<Y extends Err<unknown>, T = never, E = never>(
-  body: () => AsyncGenerator<Y, Result<T, E>>,
-): Promise<Result<T, E | ErrorOf<Y>>>;
+export function safeTry<
+  Y extends Err<unknown>,
+  R extends Result<unknown, unknown>,
+>(body: () => Generator<Y, R>): Result<ValueOf<R>, ErrorOf<Y> | ErrorOf<R>>;
+export function safeTry<
+  Y extends Err<unknown>,
+  R extends Result<unknown, unknown>,
+>(
+  body: () => AsyncGenerator<Y, R>,
+): Promise<Result<ValueOf<R>, ErrorOf<Y> | ErrorOf<R>>>;
 
 /**
  * Three details here are load-bearing. Each was established by prototype and is
@@ -111,13 +124,20 @@ export function safeTry<Y extends Err<unknown>, T = never, E = never>(
  *    `NotFound | Forbidden` to `NotFound`. A naked `Y` captures the union whole;
  *    `ErrorOf<Y>` then distributes it back out.
  *
- * 2. `T` and `E` default to `never`. In a body whose only exit is `return ok(v)`,
- *    nothing matches the `Err<E>` arm of `Result<T, E>`, so `E` gets no inference
- *    candidate and would fall back to `unknown` — and `unknown | ErrorOf<Y>`
- *    swallows the accumulated union. A default applies exactly when inference
- *    finds no candidate, so a body that does `return err(...)` still infers `E`
- *    from it. `never` is also the honest answer: a block with nothing fallible
- *    has an uninhabited error channel.
+ * 2. **`R` is naked too, and for the identical reason as `Y`** (§10.9). The
+ *    return slot was originally spelled `Result<T, E>` with `T`/`E` defaulting to
+ *    `never` — which handled a body whose only exit is `return ok(v)`, but broke
+ *    on the shape ADR 0007 §6 explicitly blesses: two distinct
+ *    `return err(...)` exits. Non-naked, they give `E` two inference candidates,
+ *    and the call fails to resolve *at all* — a hard `TS2769`, not a silent
+ *    collapse. Note 1 had already found this exact mechanism one slot over; the
+ *    return channel simply never got the same treatment.
+ *
+ *    A naked `R` captures the returned union whole, and `ValueOf`/`ErrorOf`
+ *    distribute it back out. The `never` defaults become unnecessary rather than
+ *    merely relocated: a body that only returns `ok(v)` infers `R = Ok<T>`, and
+ *    `ErrorOf<Ok<T>>` is `never` — the same honest answer the default gave, now
+ *    derived instead of asserted.
  *
  * 3. The implementation signature is deliberately loose. It cannot see that `Y`
  *    relates to `ErrorOf<Y>`, and the two public overloads above are what callers
@@ -132,8 +152,31 @@ export function safeTry(
   // One `.next()` — which is the whole short-circuit mechanism. A body suspended
   // at its first `yield` is never resumed, so every later step is unreachable.
   // A yielded Err and a returned Result are both the answer, so `.value` is the
-  // result either way and no `done` branch is needed.
-  const next = body().next();
+  // result either way and no `done` branch is needed *for the value*.
+  //
+  // The generator itself is a different matter (§10.9). Suspending it is what
+  // short-circuits, but leaving it suspended strands the body mid-execution and
+  // its `finally` blocks never run — so a `try/finally` released its resource on
+  // the success path (the generator completes normally) and leaked it on the
+  // error path, which is the path cleanup exists for. Silent: the `Result` is
+  // correct either way. `.return()` resumes the body at the `yield` as though it
+  // were a `return`, which runs every pending `finally` and closes it.
+  const generator = body();
+  const next = generator.next();
+
+  // `done` distinguishes the two exits: a *returned* Result means the body ran
+  // to completion and already unwound itself, while a *yielded* Err means it is
+  // parked and owes us its `finally` blocks. Closing a completed generator is a
+  // no-op, but branching says which case is load-bearing.
+  // Returns whatever `.return()` gave back, because an `async function*` closes
+  // asynchronously — its `finally` runs in a microtask, so the caller's promise
+  // must not settle until that has finished. Dropping this value would resolve
+  // `safeTry` before the body released anything, which is the same leak one turn
+  // later.
+  const release = (
+    settled: IteratorResult<unknown, unknown>,
+  ): unknown | undefined =>
+    settled.done ? undefined : generator.return(undefined as never);
 
   // Thenable-detected for the same §10.6 reason as `safeUnwrap` above, and it is
   // the same live bug, not a precaution: `body` is the *caller's* generator, so
@@ -146,7 +189,13 @@ export function safeTry(
   //
   // `Promise.resolve` normalizes: accept any thenable, hand back a native
   // promise, exactly as the transforms do at their boundary.
-  return isThenable(next)
-    ? Promise.resolve(next).then((settled) => settled.value)
-    : next.value;
+  if (isThenable(next)) {
+    return Promise.resolve(next).then(async (settled) => {
+      await release(settled);
+      return settled.value;
+    });
+  }
+
+  release(next);
+  return next.value;
 }

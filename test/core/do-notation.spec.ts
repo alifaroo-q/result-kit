@@ -491,3 +491,133 @@ describe('the cross-realm hole (§10.6)', () => {
     expect(result).toEqual(ok(42));
   });
 });
+
+/**
+ * §10.9. The short-circuit suspends the body at its first `yield` and never
+ * resumes it — so the generator was left parked and its `finally` blocks never
+ * ran. Cleanup ran on the success path (the generator completes normally) and
+ * was skipped on the error path, which is the path cleanup exists for.
+ */
+describe('safeTry releases the generator on short-circuit (#36 retro)', () => {
+  it('runs a finally block when the body short-circuits', () => {
+    const log: string[] = [];
+
+    safeTry(function* () {
+      try {
+        const v = yield* safeUnwrap(err({ type: 'boom' } as const));
+        return ok(v);
+      } finally {
+        log.push('cleaned');
+      }
+    });
+
+    expect(log).toEqual(['cleaned']);
+  });
+
+  it('still runs a finally block when the body completes normally', () => {
+    const log: string[] = [];
+
+    safeTry(function* () {
+      try {
+        const v = yield* safeUnwrap(ok(1));
+        return ok(v);
+      } finally {
+        log.push('cleaned');
+      }
+    });
+
+    expect(log).toEqual(['cleaned']);
+  });
+
+  it('releases a held resource rather than leaking it', () => {
+    let open = 0;
+
+    safeTry(function* () {
+      open += 1;
+      try {
+        yield* safeUnwrap(err({ type: 'boom' } as const));
+        return ok(1);
+      } finally {
+        open -= 1;
+      }
+    });
+
+    expect(open).toBe(0);
+  });
+
+  it('runs a finally block when an async body short-circuits', async () => {
+    const log: string[] = [];
+
+    await safeTry(async function* () {
+      try {
+        const v = yield* safeUnwrap(
+          Promise.resolve(err({ type: 'boom' } as const)),
+        );
+        return ok(v);
+      } finally {
+        log.push('cleaned');
+      }
+    });
+
+    expect(log).toEqual(['cleaned']);
+  });
+
+  it('returns the short-circuited Err unchanged', () => {
+    const out = safeTry(function* () {
+      try {
+        const v = yield* safeUnwrap(err({ type: 'boom' } as const));
+        return ok(v);
+      } finally {
+        /* cleanup must not alter the result */
+      }
+    });
+
+    expect(out).toEqual(err({ type: 'boom' }));
+  });
+});
+
+/**
+ * §10.9. The *yield* channel spells its slot as a naked `Y` precisely so a
+ * union of `Err`s survives inference (implementation note 1). The *return*
+ * channel was spelled `Result<T, E>` — not naked — so two distinct
+ * `return err(...)` exits gave `E` two candidates and the call failed to
+ * resolve at all. ADR 0007 §6 explicitly blesses a deliberate early
+ * `return err(...)`, and multiple of them is the ordinary shape.
+ */
+describe('safeTry accumulates the return channel too (#36 retro)', () => {
+  it('resolves a body with two distinct return err types', () => {
+    const out = safeTry(function* () {
+      if (Math.random() > 0.5) return err<NotFound>(notFound);
+      if (Math.random() > 0.9) return err<Forbidden>({ type: 'forbidden' });
+      return ok(1);
+    });
+
+    expectTypeOf(out).toEqualTypeOf<Result<number, NotFound | Forbidden>>();
+  });
+
+  it('accumulates the yield and return channels into one union', () => {
+    const out = safeTry(function* () {
+      const v = yield* safeUnwrap(findUser('u1'));
+      if (Math.random() > 0.5) return err<Timeout>({ type: 'timeout', ms: 1 });
+      return ok(v.credit);
+    });
+
+    expectTypeOf(out).toEqualTypeOf<Result<number, NotFound | Timeout>>();
+  });
+
+  it('leaves the error channel never for a body that cannot fail', () => {
+    const out = safeTry(function* () {
+      return ok(1);
+    });
+
+    expectTypeOf(out).toEqualTypeOf<Result<number, never>>();
+  });
+
+  it('short-circuits on the first of several return err exits', () => {
+    const out = safeTry(function* () {
+      return err<NotFound>(notFound);
+    });
+
+    expect(out).toEqual(err(notFound));
+  });
+});
