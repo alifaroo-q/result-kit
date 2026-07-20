@@ -240,3 +240,85 @@ export function isTypedError(x: unknown): x is TypedError {
     (typeof details === 'object' && details !== null && !Array.isArray(details))
   );
 }
+
+/**
+ * The structural lower bound of an error registry entry: **anything that builds
+ * a `TypedError`**.
+ *
+ * Deliberately *not* `ErrorCtor<string, unknown>`. `ErrorCtor`'s call signature
+ * is conditional on `[TData] extends [void]`, so a single concrete `ErrorCtor`
+ * instantiation cannot be a supertype of both the no-payload and the payload
+ * forms at once — a constraint written that way rejects half of every real
+ * registry. A registry only ever needs its values to be *callable and to return
+ * a `TypedError`*, which is exactly this shape; `(...args: never[])` is the
+ * widest parameter list every constructor is assignable to. It also admits a
+ * hand-rolled factory that never went through {@link defineError}, which is the
+ * point — the registry helpers standardize the *shape*, not the origin.
+ */
+type ErrorRegistry = Record<string, (...args: never[]) => TypedError>;
+
+/**
+ * The union of every `TypedError` a registry's constructors produce — the
+ * canonical replacement for hand-writing
+ * `ReturnType<typeof a> | ReturnType<typeof b> | …`.
+ *
+ * @example
+ * ```ts
+ * const errors = defineErrors({ notFound, forbidden });
+ * type AppError = ErrorsOf<typeof errors>;
+ * //   ^? TypedError<'not_found', { id: string }> | TypedError<'forbidden', never>
+ * ```
+ *
+ * **This is constructor-based, and that is the whole design.** It maps over the
+ * registry's *values* and infers each constructor's **return type**, so every
+ * variant keeps its own typed payload — `notFound`'s `{ id: string }` survives
+ * intact. That is precisely why v1's `TypedErrorUnion` was cut (spec §3.3): it
+ * worked off the *tags* (`TypedErrorUnion<'a' | 'b'>`) and rebuilt each variant
+ * with the interface's **default** payload, erasing the per-variant type. Spec
+ * §3.1 states the rule this encodes — "error unions are built from constructor
+ * return types, each with its own payload." Do not reintroduce a tag-keyed
+ * variant; it is the resurrection of a known-wrong design.
+ *
+ * The `: never` fallback lets it degrade gracefully over a registry derived from
+ * a module (`import * as errors`): a non-constructor export contributes `never`
+ * and vanishes from the union rather than erroring. The flip side is that a
+ * wholly malformed input (e.g. a type passed where a value was meant) collapses
+ * silently to `never` — {@link defineErrors} exists to catch that at the
+ * registration site instead.
+ */
+export type ErrorsOf<T extends ErrorRegistry> = {
+  [K in keyof T]: T[K] extends (...args: never[]) => infer R ? R : never;
+}[keyof T];
+
+/**
+ * The canonical way to declare a registry of error constructors, so the union
+ * of their outputs can be derived once with {@link ErrorsOf} instead of spelled
+ * out by hand.
+ *
+ * It is a **constrained identity** — it returns the registry unchanged, and its
+ * only runtime cost is the call. Its value is entirely at the type level: the
+ * {@link ErrorRegistry} bound rejects a non-constructor entry *here*, at the
+ * point the mistake is made, rather than letting {@link ErrorsOf} quietly fold
+ * it into `never` downstream. The `const` type parameter preserves the object's
+ * literal key set and each entry's precise `ErrorCtor` type, which is what keeps
+ * the derived union exact.
+ *
+ * @example
+ * ```ts
+ * export const billingErrors = defineErrors({
+ *   missingBaseItem,
+ *   missingSwapItem,
+ *   planNotFound,
+ * });
+ * export type BillingError = ErrorsOf<typeof billingErrors>;
+ * ```
+ *
+ * Grouping is **opt-in**. The manual form —
+ * `type E = ReturnType<typeof a> | ReturnType<typeof b>` — stays fully
+ * supported (spec §3.1 shows it), and {@link ErrorsOf} also accepts a plain
+ * object literal of constructors with no wrapping call. Reach for `defineErrors`
+ * when you want the registration-time check and one named home for the bag.
+ */
+export function defineErrors<const T extends ErrorRegistry>(registry: T): T {
+  return registry;
+}

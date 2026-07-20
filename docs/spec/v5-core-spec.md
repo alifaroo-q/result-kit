@@ -135,6 +135,28 @@ const conflict  = defineError.withData<{ id: string }>()('conflict', 'Already ex
 type ApiError = ReturnType<typeof notFound> | ReturnType<typeof forbidden>;
 ```
 
+### 3.1a Error registries — `defineErrors` / `ErrorsOf`
+
+The manual union above (`ReturnType<typeof notFound> | …`) stays fully supported. `defineErrors` / `ErrorsOf` are the **opt-in canonical form** for building it once from a named bag of constructors, added 2026-07-20 as a backward-compatible minor.
+
+```ts
+export function defineErrors<const T extends ErrorRegistry>(registry: T): T;
+export type ErrorsOf<T extends ErrorRegistry> = {
+  [K in keyof T]: T[K] extends (...args: never[]) => infer R ? R : never;
+}[keyof T];
+// ErrorRegistry = Record<string, (...args: never[]) => TypedError> — internal, not exported.
+```
+
+```ts
+const billingErrors = defineErrors({ missingBaseItem, missingSwap, planNotFound });
+type BillingError = ErrorsOf<typeof billingErrors>;
+```
+
+1. **`defineErrors` is a constrained identity.** It returns the registry unchanged; the only work it does is at the type level. The `ErrorRegistry` bound rejects a non-constructor entry *at the registration site* rather than letting it fold silently into `never` inside `ErrorsOf`. The `const` type parameter keeps the key set and each entry's `ErrorCtor` precise.
+2. **`ErrorsOf` is constructor-based, never tag-based.** It maps over the registry's *values* and infers each constructor's **return type**, so every variant keeps its own typed payload. This is the mechanism §3.1 already mandates ("error unions are built from constructor return types, each with its own payload"), packaged as a helper — it is **not** the cut `TypedErrorUnion` (§3.3, §10.15), which keyed off tags and rebuilt variants with the default payload.
+3. **The registry constraint is structural, not `ErrorCtor<string, unknown>`.** `ErrorCtor`'s call signature is conditional on `[TData] extends [void]`, so no single instantiation is a supertype of both the payload and no-payload forms; the structural `(...args: never[]) => TypedError` lower bound admits every real constructor — and a hand-rolled factory too, since the helpers standardize the shape, not the origin.
+4. **`ErrorsOf` also accepts a plain object literal** with no wrapping call, and its `: never` fallback lets it degrade over an `import * as errors` module (non-constructor exports vanish rather than erroring). `defineErrors` is the stricter door for when you want the registration-time check.
+
 ### 3.2 Guards
 
 - **`notFound.is(x)`** — per-variant, **tag-only** (`x.type === 'not_found'`). It cannot validate the payload at runtime; that needs a schema.
@@ -142,7 +164,7 @@ type ApiError = ReturnType<typeof notFound> | ReturnType<typeof forbidden>;
 
 ### 3.3 Cut from v1
 
-`TypedErrorOf` (a redundant alias) and `TypedErrorUnion` (distributes tags into same-*default*-payload variants, fighting the per-variant typed payload). `isTypedError` is **kept, unchanged in name**. v1's separate typed `fail` constructor collapses into the single generic `err` — the typed convention is expressed by *what you pass*, not a second constructor.
+`TypedErrorOf` (a redundant alias) and `TypedErrorUnion` (distributes tags into same-*default*-payload variants, fighting the per-variant typed payload). The `ErrorsOf` helper added in §3.1a is **not** a return of `TypedErrorUnion`: it maps over constructor *values* and infers their return types, so per-variant payloads survive — the exact failure that got `TypedErrorUnion` cut. `isTypedError` is **kept, unchanged in name**. v1's separate typed `fail` constructor collapses into the single generic `err` — the typed convention is expressed by *what you pass*, not a second constructor.
 
 ### 3.4 Formatters (2)
 
@@ -435,11 +457,11 @@ export type { OkTypeOf, ErrTypeOf };        // §5.4 — see §10
 
 ### 5.9 Complete root export list
 
-**Values (29):**
+**Values (30):**
 
 | Group | Exports |
 |---|---|
-| Constructors & guards (6) | `ok` `err` `isOk` `isErr` `isTypedError` `defineError` |
+| Constructors & guards (7) | `ok` `err` `isOk` `isErr` `isTypedError` `defineError` `defineErrors` |
 | Formatters (2) | `groupByType` `prettifyErrors` |
 | Transforms (6) | `map` `mapErr` `andThen` `orElse` `inspect` `inspectErr` |
 | Terminals (5) | `match` `unwrapOr` `unwrapOrElse` `unwrapOrThrow` `toNullable` |
@@ -448,7 +470,7 @@ export type { OkTypeOf, ErrTypeOf };        // §5.4 — see §10
 | Async constructors (2) | `fromPromise` `fromThrowableAsync` |
 | Do-notation (2) | `safeTry` `safeUnwrap` |
 
-**Types (7):** `Result` `Ok` `Err` `TypedError` `ErrorCtor` `OkTypeOf` `ErrTypeOf`
+**Types (8):** `Result` `Ok` `Err` `TypedError` `ErrorCtor` `ErrorsOf` `OkTypeOf` `ErrTypeOf`
 
 **Not exported from root:** `ResultChain`, `ResultAsync`, `from` — these are `/fluent` only, and §7.3's guard enforces it.
 
@@ -1129,6 +1151,19 @@ The half-life got shorter, and §10.8 is the sharpest demonstration this documen
 
 1. **A right answer reached by a wrong argument is not a right decision** — it is a coin landing well. It survives until someone reasons *from* the recorded rationale, which is the entire purpose of writing one down.
 2. **The pass that catches this is the retro**, and it has no ticket. Consolidation, ticketing, and building each have a moment that forces them; asking "was that actually right?" after the tests pass has none. Green is not the end of the loop.
+
+### 10.14 Error registries are constructor-keyed, reviving nothing — **decided (2026-07-20, post-freeze additive)**
+
+`defineErrors` / `ErrorsOf` (§3.1a) land after the `5.0.0` freeze as a backward-compatible minor: the manual `ReturnType<typeof a> | …` union stays, this is the opt-in canonical spelling. The one hazard worth pinning is that §3.3 records a **cut** helper of the same silhouette — `TypedErrorUnion` — so the resemblance had to be disproven, not waved off.
+
+The two are opposites at the mechanism that got the old one cut. `TypedErrorUnion` keyed off **tags** (`TypedErrorUnion<'a' | 'b'>`) and rebuilt each variant from the interface's *default* payload, erasing the per-variant typed payload. `ErrorsOf` keys off the **constructor values** and infers each one's *return type* — which is the rule §3.1 already states ("error unions are built from constructor return types, each with its own payload"). It is that sentence packaged as a helper, not the cut design returning. The distinction is pinned by a test asserting the derived union keeps `{ dimension }` / `{ slug }` / `never` per variant rather than collapsing to `Record<string, unknown>`.
+
+Two smaller calls, both recorded so they are not re-litigated:
+
+- **The registry bound is structural — `(...args: never[]) => TypedError` — not `ErrorCtor<string, unknown>`.** `ErrorCtor`'s call signature is conditional on `[TData] extends [void]`, so no single instantiation is a supertype of both the payload and no-payload forms; a bound written that way rejects half of every real registry. The structural lower bound admits every constructor, and a hand-rolled factory too — the helpers standardize the shape, not the origin.
+- **`defineErrors` is a constrained identity, not a runtime validator.** Its whole value is the compile-time bound firing at the registration site instead of `ErrorsOf` folding a bad entry silently into `never`; adding a runtime scan would buy nothing the type already guarantees and would break the free-identity/hand-roll symmetry the two paths share.
+
+**Not escalated to an ADR.** No prior decision reverses — §3.3's cut stands, and this is additive surface it does not touch.
 
 ## 11. Traceability
 
