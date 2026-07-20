@@ -16,6 +16,8 @@ const greeting = ok(user)
 ```
 
 > **Upgrading from 1.x?** See [`MIGRATION.md`](MIGRATION.md). It is a full rework — most names moved, and one of them (`unwrapOrThrow`) breaks *silently*.
+>
+> **Adopting it in a real codebase?** [`RECIPES.md`](RECIPES.md) covers the patterns that come up first: gradual adoption alongside throwing code, mapping to HTTP, testing, and the one type gotcha to know about.
 
 ---
 
@@ -170,6 +172,7 @@ On the fluent side, `.isOk()` / `.isErr()` return **plain booleans** and buy you
 | `isOk(r)` / `isErr(r)` | Type-predicate guards |
 | `isTypedError(e)` | Whether a value follows the `TypedError` convention |
 | `defineError(type, message)` | Build a typed-error constructor — see [below](#structured-errors) |
+| `defineErrors(registry)` | Group constructors so their union derives with `ErrorsOf` — see [below](#structured-errors) |
 
 **Transforms** — each takes a `Result` *or* a `Promise<Result>`
 
@@ -218,7 +221,7 @@ On the fluent side, `.isOk()` / `.isErr()` return **plain booleans** and buy you
 
 **Do-notation** — `safeTry`, `safeUnwrap`. See [below](#do-notation).
 
-**Types** — `Result` `Ok` `Err` `TypedError` `ErrorCtor` `OkTypeOf` `ErrTypeOf`
+**Types** — `Result` `Ok` `Err` `TypedError` `ErrorCtor` `ErrorsOf` `OkTypeOf` `ErrTypeOf`
 
 ### `/fluent` — `@zireal/result-kit/fluent`
 
@@ -288,6 +291,8 @@ const total = safeTry(function* () {
 }).unwrapOr(0);
 ```
 
+> **Gotcha — returning a discriminated union from a `safeTry` body.** `return ok({ kind: 'noop' })` inside a generator widens `'noop'` to `string`, because the generator's return type is inferred before it is checked against your union. Pin the literal with `ok({ kind: 'noop' } satisfies MyUnion)` (or `as const`, or `ok<MyUnion>({ … })`). Full explanation and trade-offs in [`RECIPES.md`](RECIPES.md#discriminated-union-returns-widen-inside-safetry).
+
 ---
 
 ## Structured errors
@@ -305,6 +310,20 @@ type AppError = ReturnType<typeof notFound> | ReturnType<typeof forbidden>;
 const failure = err(notFound({ id: 'u1' }));
 //    ^? Err<TypedError<'not_found', { id: string }>>
 ```
+
+Once you have more than a couple, group them with `defineErrors` and derive the union in one line with `ErrorsOf` instead of spelling out every `ReturnType`:
+
+```ts
+import { defineErrors } from '@zireal/result-kit';
+import type { ErrorsOf } from '@zireal/result-kit';
+
+export const appErrors = defineErrors({ notFound, forbidden });
+
+export type AppError = ErrorsOf<typeof appErrors>;
+//          ^? TypedError<'not_found', { id: string }> | TypedError<'forbidden', never>
+```
+
+`defineErrors` returns the object unchanged — its job is purely to type-check the bag, so a non-constructor entry is caught where you write it, not later. Each variant keeps its own payload, so a `switch (error.type)` still narrows exhaustively. The manual `ReturnType<typeof a> | …` form stays fully supported; reach for the registry when you want one named home for the set.
 
 The values are plain objects — `{ type, message, details?, cause? }` — never classes, never `extends Error`. They serialize, and they narrow:
 
@@ -343,6 +362,19 @@ if (!combined.ok) {
 
 ---
 
+## Testing
+
+A `Result` is plain data — never a class, never `extends Error` — so you assert on it with a structural `toEqual`, no custom matcher and no fighting `instanceof`:
+
+```ts
+expect(await changePlan(input)).toEqual(ok({ kind: 'noop' }));
+expect(await changePlan(bad)).toEqual(err(missingBaseItem()));
+```
+
+See [`RECIPES.md`](RECIPES.md#testing-code-that-returns-result) for a one-line `expectOk` helper that narrows to the value without guard boilerplate at each call site.
+
+---
+
 ## Tree-shaking
 
 The root entrypoint is a flat barrel of standalone functions and the package is marked `sideEffects: false`. Import `map` and you ship `map`.
@@ -353,6 +385,7 @@ The fluent wrapper lives behind `/fluent` and is **never** reachable from the ro
 
 ## Documentation
 
+- [`RECIPES.md`](RECIPES.md) — adoption patterns: gradual migration, HTTP mapping, testing, the `safeTry` widening gotcha.
 - [`MIGRATION.md`](MIGRATION.md) — upgrading from 1.x.
 - [`CHANGELOG.md`](CHANGELOG.md) — release history.
 - [`CONTEXT.md`](CONTEXT.md) — the project's vocabulary.
