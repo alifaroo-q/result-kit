@@ -1,7 +1,13 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
-import { defineError, err, isTypedError, unwrapOrThrow } from '../../src/index';
-import type { TypedError } from '../../src/index';
+import {
+  defineError,
+  defineErrors,
+  err,
+  isTypedError,
+  unwrapOrThrow,
+} from '../../src/index';
+import type { ErrorsOf, TypedError } from '../../src/index';
 
 // The three canonical variants of §3.1, defined once: a payload variant whose
 // message derives from the payload, a no-payload variant, and the `.withData`
@@ -352,5 +358,79 @@ describe('the guards against the shapes their own types admit (#36 retro)', () =
     const notFound = defineError('not_found', 'not found');
 
     expect(notFound.is(notFound())).toBe(true);
+  });
+});
+
+describe('defineErrors / ErrorsOf (§3.1 registry)', () => {
+  const billingErrors = defineErrors({
+    missingBaseItem: defineError('missing_base_item', 'no base item'),
+    missingSwap: defineError(
+      'missing_swap_item',
+      (d: { dimension: string }) => `missing item for ${d.dimension}`,
+    ),
+    planNotFound: defineError(
+      'plan_not_found',
+      (d: { slug: string }) => `plan ${d.slug} not found`,
+    ),
+  });
+
+  it('returns the registry unchanged — it is a constrained identity', () => {
+    const input = { notFound };
+    expect(defineErrors(input)).toBe(input);
+  });
+
+  it('the derived union keeps each variant’s own payload (constructor-based)', () => {
+    // This is the property that separates ErrorsOf from the cut, tag-based
+    // TypedErrorUnion (spec §3.3): the payload variant keeps `{ dimension }`
+    // and `{ slug }`, the no-payload variant keeps `never` — none collapse to
+    // the interface's default `Record<string, unknown>`.
+    type BillingError = ErrorsOf<typeof billingErrors>;
+
+    expectTypeOf<BillingError>().toEqualTypeOf<
+      | TypedError<'missing_base_item', never>
+      | TypedError<'missing_swap_item', { dimension: string }>
+      | TypedError<'plan_not_found', { slug: string }>
+    >();
+  });
+
+  it('the discriminant stays literal, so a switch narrows exhaustively', () => {
+    const describe = (e: ErrorsOf<typeof billingErrors>): string => {
+      switch (e.type) {
+        case 'missing_base_item':
+          return 'base';
+        case 'missing_swap_item':
+          return e.details?.dimension ?? '';
+        case 'plan_not_found':
+          return e.details?.slug ?? '';
+        default: {
+          // Exhaustiveness: if a variant is unhandled this stops compiling.
+          const _never: never = e;
+          return _never;
+        }
+      }
+    };
+
+    expect(describe(billingErrors.missingSwap({ dimension: 'seats' }))).toBe(
+      'seats',
+    );
+    expect(describe(billingErrors.missingBaseItem())).toBe('base');
+  });
+
+  it('ErrorsOf also works on a plain object literal, no wrapping call', () => {
+    const bag = { notFound, forbidden };
+    type E = ErrorsOf<typeof bag>;
+
+    expectTypeOf<E>().toEqualTypeOf<
+      TypedError<'not_found', { id: string }> | TypedError<'forbidden', never>
+    >();
+  });
+
+  it('rejects a non-constructor entry at the registration site', () => {
+    defineErrors({
+      good: notFound,
+      // @ts-expect-error — a number does not build a TypedError; the bound bites
+      // here, not silently downstream in ErrorsOf.
+      bad: 42,
+    });
   });
 });

@@ -6,8 +6,10 @@ export {
 export { safeTry, safeUnwrap } from './core/do-notation';
 export {
   defineError,
+  defineErrors,
   isTypedError,
   type ErrorCtor,
+  type ErrorsOf,
   type TypedError,
 } from './core/error';
 export { groupByType, prettifyErrors } from './core/format';
