@@ -1,6 +1,6 @@
 {
   "name": "@zireal/result-kit",
-  "version": "5.0.2",
+  "version": "5.1.0",
   "description": "Type-safe result and structured error utilities for TypeScript. Zero-dependency, ESM-only.",
   "license": "MIT",
   "author": "Ali Farooq <alifarooq122@gmail.com>",
