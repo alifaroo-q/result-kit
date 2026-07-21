@@ -1,3 +1,4 @@
+export { expectErr, expectOk } from './core/assertions';
 export {
   combine,
   combineWithAllErrors,
