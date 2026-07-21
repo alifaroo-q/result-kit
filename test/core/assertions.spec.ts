@@ -58,3 +58,14 @@ describe('expectErr', () => {
     );
   });
 });
+
+describe('root barrel surface', () => {
+  // §5.9 lists `expectOk` / `expectErr` in the Assertions group — the mirror of
+  // error.spec.ts's negative surface check, locking the two symbols on `.`.
+  it('exports expectOk and expectErr', async () => {
+    const surface = await import('../../src/index');
+
+    expect(Object.keys(surface)).toContain('expectOk');
+    expect(Object.keys(surface)).toContain('expectErr');
+  });
+});
