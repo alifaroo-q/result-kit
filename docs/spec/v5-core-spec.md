@@ -457,7 +457,7 @@ export type { OkTypeOf, ErrTypeOf };        // §5.4 — see §10
 
 ### 5.9 Complete root export list
 
-**Values (30):**
+**Values (32):**
 
 | Group | Exports |
 |---|---|
@@ -469,6 +469,7 @@ export type { OkTypeOf, ErrTypeOf };        // §5.4 — see §10
 | Interop (3) | `fromNullable` `fromPredicate` `fromThrowable` |
 | Async constructors (2) | `fromPromise` `fromThrowableAsync` |
 | Do-notation (2) | `safeTry` `safeUnwrap` |
+| Assertions (2) | `expectOk` `expectErr` |
 
 **Types (8):** `Result` `Ok` `Err` `TypedError` `ErrorCtor` `ErrorsOf` `OkTypeOf` `ErrTypeOf`
 

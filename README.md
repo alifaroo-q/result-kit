@@ -371,7 +371,19 @@ expect(await changePlan(input)).toEqual(ok({ kind: 'noop' }));
 expect(await changePlan(bad)).toEqual(err(missingBaseItem()));
 ```
 
-See [`RECIPES.md`](RECIPES.md#testing-code-that-returns-result) for a one-line `expectOk` helper that narrows to the value without guard boilerplate at each call site.
+To read `.value` (or `.error`) after asserting the branch, without `isOk`-guard boilerplate at each call site, use the built-in `expectOk` / `expectErr` — narrowing assertions that throw a descriptive error on the wrong branch:
+
+```ts
+import { expectOk, expectErr } from '@zireal/result-kit';
+
+const value = expectOk(await loadPlan(id));
+expect(value.items).toHaveLength(2);
+
+const error = expectErr(await failingCall());
+expect(error.type).toBe('not_found');
+```
+
+See [`RECIPES.md`](RECIPES.md#testing-code-that-returns-result) for the full testing recipe.
 
 ---
 
