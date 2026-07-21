@@ -1,5 +1,25 @@
 # @zireal/result-kit
 
+## 5.1.0
+
+### Minor Changes
+
+- 7558fb8: Add `defineErrors` and the `ErrorsOf<T>` type — the canonical way to declare a registry of error constructors and derive the union of their outputs in one line, instead of hand-writing `ReturnType<typeof a> | ReturnType<typeof b> | …`.
+
+  ```ts
+  import { defineErrors } from "@zireal/result-kit";
+  import type { ErrorsOf } from "@zireal/result-kit";
+
+  const appErrors = defineErrors({ notFound, forbidden });
+  type AppError = ErrorsOf<typeof appErrors>;
+  ```
+
+  `ErrorsOf` is constructor-based, so every variant keeps its own typed payload and the discriminant stays literal for exhaustive `switch (error.type)` narrowing. `defineErrors` is a constrained identity — it type-checks the bag so a non-constructor entry is caught at the registration site. Both are additive: the manual `ReturnType<…>` union stays fully supported, and `ErrorsOf` also accepts a plain object literal of constructors.
+
+### Patch Changes
+
+- 1cafc4d: Add `RECIPES.md`, a task-oriented adoption cookbook shipped in the package: gradual adoption alongside throwing code (`unwrapOrThrow` as the boundary adapter), mapping a `Result` to an HTTP response without changing the `TypedError` shape, testing with plain-data `toEqual`, and the discriminated-union widening gotcha inside `safeTry` bodies with the `satisfies` / `as const` / explicit-type-arg fixes. README now links to it and carries a short widening-gotcha callout.
+
 ## 5.0.2
 
 ### Patch Changes
