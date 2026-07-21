@@ -136,20 +136,14 @@ expect(await changeSubscriptionPlan(input)).toEqual(ok({ kind: 'noop' }));
 expect(await changeSubscriptionPlan(bad)).toEqual(err(missingBaseItem()));
 ```
 
-To read `.value` after asserting success without `isOk`-guard boilerplate at every call site, a one-line userland helper narrows and throws a helpful message on the wrong branch:
+To read `.value` after asserting success without `isOk`-guard boilerplate at every call site, use the built-in `expectOk` / `expectErr` — narrowing assertions that throw a descriptive error on the wrong branch:
 
 ```ts
-import { isOk } from '@zireal/result-kit';
-import type { Result } from '@zireal/result-kit';
+import { expectOk, expectErr } from '@zireal/result-kit';
 
-function expectOk<T, E>(result: Result<T, E>): T {
-  if (!isOk(result)) {
-    throw new Error(`expected Ok, got Err: ${JSON.stringify(result.error)}`);
-  }
-  return result.value;
-}
-
-// then:
 const value = expectOk(await loadPlan(id));
 expect(value.items).toHaveLength(2);
+
+const error = expectErr(await failingCall());
+expect(error.type).toBe('not_found');
 ```

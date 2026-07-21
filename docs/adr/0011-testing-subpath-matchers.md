@@ -1,6 +1,6 @@
 # ADR 0011 — Optional `/testing` subpath with Result-aware matchers
 
-- **Status:** Proposed
+- **Status:** Accepted (Option B — root barrel helpers)
 - **Date:** 2026-07-20
 - **Deciders:** Ali Farooq
 - **Ticket:** [Optional test-matcher subpath (`/testing`) with Result-aware matchers](https://github.com/alifaroo-q/result-kit/issues/50)
@@ -48,9 +48,15 @@ Vitest is an **optional peer dependency**, referenced only from this subpath, so
 
 ## Decision
 
-**Deferred — pending maintainer direction on the peer-dependency stance.** The interim (option C) is already in place: `RECIPES.md` documents the plain-data `toEqual` pattern and a one-line `expectOk` helper, so adopters are unblocked today. This ADR records the design so the decision, when taken, is made against the invariants rather than around them.
+**Option B — `expectOk`/`expectErr` shipped from the root barrel.** Shipping these as pure, framework-agnostic functions keeps the zero-dependency invariant intact, requires no new entrypoint, and solves the `.value` access friction users reported.
+
+The `/testing` subpath with Vitest custom matchers (Option A) is **deferred**:
+- `toBeOk`/`toBeErr` remain worth shipping, but the peer-dependency question needs maintainer direction first.
+- Option A can be added on top of Option B at any time — the matchers would delegate to the same `expectOk`/`expectErr` core.
 
 ## Consequences
 
-- If **A**: first peer dep in the package's history — the README/spec "zero-peerDependency" claim must be qualified to "zero *required* dependencies".
-- If **B** or **C**: no invariant moves; the DX gap stays a documented userland one-liner.
+- **Option A is deferred.** The peer-dependency question remains open. Shipping it later is additive, not breaking.
+- **`expectOk`/`expectErr` are exported from the root barrel**, adding two symbols to the public surface.
+- **No invariant moves.** The package remains zero-dependency, zero-peerDependency.
+- **`RECIPES.md` updated** to reference the built-in helpers instead of the userland snippet.
