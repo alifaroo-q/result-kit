@@ -34,12 +34,13 @@
   },
   "devDependencies": {
     "@arethetypeswrong/core": "^0.18.5",
-    "@changesets/cli": "^2.30.0",
-    "@types/node": "^22.19.15",
-    "publint": "^0.3.18",
-    "tsdown": "^0.22.8",
+    "@changesets/cli": "^2.31.1",
+    "@types/node": "^26.1.1",
+    "@vitest/coverage-v8": "^4.1.10",
+    "publint": "^0.3.21",
+    "tsdown": "^0.22.13",
     "typescript": "^7.0.2",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.10"
   },
   "engines": {
     "node": ">=22.12"
