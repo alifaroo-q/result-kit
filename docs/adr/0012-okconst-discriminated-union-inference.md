@@ -1,7 +1,7 @@
 # ADR 0012 — Opt-in `okConst` for discriminated-union payloads
 
-- **Status:** Proposed
-- **Date:** 2026-07-20
+- **Status:** Accepted (docs-only; `okConst` not shipped)
+- **Date:** 2026-07-20 (accepted 2026-07-23)
 - **Deciders:** Ali Farooq
 - **Ticket:** [Opt-in `okConst` (const inference) for discriminated-union payloads](https://github.com/alifaroo-q/result-kit/issues/51)
 - **Builds on:** [ADR 0003 — v2 result type shape](./0003-v2-result-type-shape.md), [ADR 0007 — v2 do-notation helper](./0007-v2-do-notation-helper.md)
@@ -37,7 +37,7 @@ The `safeTry<T,E>` idea (an earlier hypothesis) is **falsified**: the compiler i
 
 The **primary remedy is documentation**, already shipped in [`RECIPES.md`](../../RECIPES.md#discriminated-union-returns-widen-inside-safetry): prefer `satisfies YourUnion` (no `readonly`), then `as const` (flat unions), then explicit `ok<Union>({...})`.
 
-An **opt-in `okConst`** (a second export with `<const T>` inference, documented "for object/discriminated-union payloads, not arrays") remains open as a convenience, but is **not recommended**: its only advantage over `satisfies` is skipping the type name, and it carries the identical readonly-array trap. Leaning docs-only keeps net-new symbols off the just-frozen root surface.
+An **opt-in `okConst`** (a second export with `<const T>` inference, documented "for object/discriminated-union payloads, not arrays") was considered and **rejected** with the acceptance of this ADR ([#51](https://github.com/alifaroo-q/result-kit/issues/51) closed as docs-only): its only advantage over `satisfies` is skipping the type name, and it carries the identical readonly-array trap. Docs-only keeps net-new symbols off the just-frozen root surface.
 
 ## Consequences
 
