@@ -35,6 +35,7 @@
 import type { MatcherState } from 'vitest';
 
 import { expectErr, expectOk } from '../core/assertions';
+import { renderPayload } from '../core/render';
 import { isOk } from '../core/result';
 import type { Result } from '../core/result';
 
@@ -111,6 +112,11 @@ function isResultLike(x: unknown): x is Result<unknown, unknown> {
  * distinction is load-bearing under `.not`: a `pass: false` would make
  * `expect(42).not.toBeOk()` *succeed*, quietly reporting green about a subject
  * the matcher never understood. A throw fails in both directions.
+ *
+ * The subject is rendered by the core {@link renderPayload}, the same function
+ * the delegated wrong-branch messages use. This guard carried its own hardened
+ * copy until the *delegated* path was found to be un-hardened — so there is one
+ * home now, and the next fix lands on both.
  */
 function asResult(
   received: unknown,
@@ -118,37 +124,11 @@ function asResult(
 ): Result<unknown, unknown> {
   if (!isResultLike(received)) {
     throw new TypeError(
-      `${matcher}: expected a Result — an object with a boolean \`ok\` — but received ${render(received)}`,
+      `${matcher}: expected a Result — an object with a boolean \`ok\` — but received ${renderPayload(received)}`,
     );
   }
 
   return received;
-}
-
-/**
- * A rendering of the subject that **cannot itself throw**.
- *
- * `JSON.stringify` throws on two shapes a real caller reaches this guard with:
- * a circular object (a model with back-references, a DOM node) and a `BigInt`
- * id. Both surfaced a raw `TypeError: Converting circular structure to JSON`
- * in place of the guard's own message — the diagnostic replaced by a worse one,
- * at exactly the moment the caller is already confused about what they passed.
- * Found by test, not by review.
- *
- * `undefined` needs the `??` for a different reason: `JSON.stringify` returns
- * `undefined` rather than a string for it, and `"received undefined"` is the
- * useful thing to say.
- *
- * The last resort is `Object.prototype.toString`, not `String`, because
- * `String(Symbol())` throws too — so a `String` fallback would reintroduce the
- * same class of failure one level down.
- */
-function render(received: unknown): string {
-  try {
-    return JSON.stringify(received) ?? String(received);
-  } catch {
-    return Object.prototype.toString.call(received);
-  }
 }
 
 /**

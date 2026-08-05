@@ -59,6 +59,67 @@ describe('expectErr', () => {
   });
 });
 
+describe('expectOk / expectErr — payloads that broke the message', () => {
+  // These are public API in their own right, not only the matchers' delegate,
+  // and each of these threw the *wrong error entirely* before `renderPayload`:
+  // the caller asking "why is this an Err?" got a serializer crash instead.
+  const hostile: [label: string, make: () => unknown][] = [
+    [
+      'a circular object',
+      () => {
+        const node: Record<string, unknown> = { type: 'not_found' };
+        node.self = node;
+        return node;
+      },
+    ],
+    ['a BigInt', () => 10n],
+    ['an object carrying a BigInt id', () => ({ id: 10n })],
+    [
+      'an object with a throwing toJSON',
+      () => ({
+        toJSON() {
+          throw new Error('nope');
+        },
+      }),
+    ],
+    ['a Symbol', () => Symbol('session')],
+    ['a function', () => function handler() {}],
+    ['a real Error', () => new Error('kaboom')],
+  ];
+
+  it.each(hostile)('expectOk_errCarrying_%s_throwsItsOwnMessage', (_l, make) => {
+    expect(() => expectOk(err(make()))).toThrow(/^Expected Ok, got Err: \S/);
+  });
+
+  it.each(hostile)('expectErr_okCarrying_%s_throwsItsOwnMessage', (_l, make) => {
+    expect(() => expectErr(ok(make()))).toThrow(/^Expected Err, got Ok: \S/);
+  });
+
+  it('expectOk_errCarryingARealError_namesItRatherThanEmptyBraces', () => {
+    // The most common Err payload there is — anything a try/catch wrapper
+    // produces — and `JSON.stringify` renders it as `{}`.
+    expect(() => expectOk(err(new Error('kaboom')))).toThrow(
+      'Expected Ok, got Err: Error: kaboom',
+    );
+  });
+
+  it('expectOk_errCarryingACircularObject_keepsTheReadablePart', () => {
+    const node: Record<string, unknown> = { type: 'not_found' };
+    node.self = node;
+
+    expect(() => expectOk(err(node))).toThrow(/not_found/);
+  });
+
+  it('expectOk_stillReturnsTheValueWhenThePayloadIsHostile', () => {
+    // The rendering change must not reach the success path — nothing is
+    // rendered when the assertion holds.
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    expect(expectOk(ok(circular))).toBe(circular);
+  });
+});
+
 describe('root barrel surface', () => {
   // §5.9 lists `expectOk` / `expectErr` in the Assertions group — the mirror of
   // error.spec.ts's negative surface check, locking the two symbols on `.`.
