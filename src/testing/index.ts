@@ -70,8 +70,17 @@ function thrownMessage(assertion: () => unknown): string {
     return thrown instanceof Error ? thrown.message : String(thrown);
   }
 
-  // Unreachable: every call site passes the failing branch.
-  return '';
+  // Reachable only when a caller pairs the wrong assertion with the branch it
+  // is on — which is not hypothetical: that is exactly the bug `toBeErr`
+  // shipped with, and returning `''` here is what made it *silent*. An empty
+  // message still satisfies `toThrow()`, so the suite stayed green while every
+  // `toBeErr` failure reported nothing. Throwing turns the same mistake into a
+  // loud one. Left uncovered on purpose: reaching it means the invariant above
+  // is already broken.
+  throw new Error(
+    'result-kit/testing: internal invariant — a matcher paired a non-throwing ' +
+      'assertion with its branch, which would have produced an empty failure message.',
+  );
 }
 
 /**
@@ -109,11 +118,37 @@ function asResult(
 ): Result<unknown, unknown> {
   if (!isResultLike(received)) {
     throw new TypeError(
-      `${matcher}: expected a Result — an object with a boolean \`ok\` — but received ${JSON.stringify(received) ?? String(received)}`,
+      `${matcher}: expected a Result — an object with a boolean \`ok\` — but received ${render(received)}`,
     );
   }
 
   return received;
+}
+
+/**
+ * A rendering of the subject that **cannot itself throw**.
+ *
+ * `JSON.stringify` throws on two shapes a real caller reaches this guard with:
+ * a circular object (a model with back-references, a DOM node) and a `BigInt`
+ * id. Both surfaced a raw `TypeError: Converting circular structure to JSON`
+ * in place of the guard's own message — the diagnostic replaced by a worse one,
+ * at exactly the moment the caller is already confused about what they passed.
+ * Found by test, not by review.
+ *
+ * `undefined` needs the `??` for a different reason: `JSON.stringify` returns
+ * `undefined` rather than a string for it, and `"received undefined"` is the
+ * useful thing to say.
+ *
+ * The last resort is `Object.prototype.toString`, not `String`, because
+ * `String(Symbol())` throws too — so a `String` fallback would reintroduce the
+ * same class of failure one level down.
+ */
+function render(received: unknown): string {
+  try {
+    return JSON.stringify(received) ?? String(received);
+  } catch {
+    return Object.prototype.toString.call(received);
+  }
 }
 
 /**

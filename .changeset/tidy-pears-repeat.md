@@ -25,3 +25,5 @@ Both `*With` matchers are deep equality; partial matching is Vitest's own `expec
 `vitest` is now declared as an **optional** peer dependency. Optional peers are never installed, and the shipped `dist/testing/` chunk imports no bare specifier at all, so the core artifact's zero-install-footprint promise is unchanged — a consumer who installs `@zireal/result-kit` for `ok` / `err` / `Result` still pulls in nothing. That is asserted against the built bundle, not just the manifest. (ADR 0014 §0–§1, closing ADR 0011's deferred Option A.)
 
 Round one is Vitest-only. On Jest or any other runner, the framework-agnostic `expectOk` / `expectErr` remain the supported path.
+
+The `/testing` guard that rejects a non-`Result` subject no longer crashes on values `JSON.stringify` refuses — a circular object, a `BigInt`, a `Symbol`, or an object with a throwing `toJSON` now produce the intended `expected a Result` message instead of a `TypeError` from inside the matcher.
