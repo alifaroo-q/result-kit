@@ -70,8 +70,15 @@ function stripComments(code: string): string {
   return code.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 }
 
-/** Every import specifier in a chunk. Bare ones included — see `importsOf`. */
-function allImports(code: string): string[] {
+/**
+ * Every import specifier in a chunk. Bare ones included — see `importsOf`.
+ *
+ * Exported so [`bundle.spec.ts`](./bundle.spec.ts) can test it directly. This
+ * is the piece that reported the *opposite of the truth* about the shipped
+ * bundle, and a guard whose detector is untested is a guard that reports green
+ * for the wrong reason — §7.3's own closing note.
+ */
+export function allImports(code: string): string[] {
   return [
     ...stripComments(code).matchAll(/(?:from|import)\s*["']([^"']+)["']/g),
   ].map((m) => m[1] as string);
