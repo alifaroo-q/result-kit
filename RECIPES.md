@@ -88,21 +88,18 @@ Going the other way — wrapping a throwing dependency *into* a `Result` — use
 
 ## Mapping a `Result` to an HTTP response
 
-The core takes no opinion on your framework (the 1.x `/nest` adapter was removed). Map at the boundary with a small function you own. Keep the mapping in your app, not in the error shape — a `TypedError` is exactly `{ type, message, details?, cause? }`, and adding a top-level `status` field breaks its JSON round-trip contract. Switch on the discriminant instead:
+The core takes no opinion on your framework (the 1.x `/nest` adapter was removed). Map at the boundary with a small function you own. Keep the mapping in your app, not in the error shape — a `TypedError` is exactly `{ type, message, details?, cause? }`, and adding a top-level `status` field breaks its JSON round-trip contract. Dispatch on the discriminant instead:
 
 ```ts
-import { isErr } from '@zireal/result-kit';
+import { isErr, matchType } from '@zireal/result-kit';
 
-function errToStatus(error: BillingError): number {
-  switch (error.type) {
-    case 'plan_not_found':
-      return 404;
-    case 'missing_company_id':
-      return 422;
-    default:
-      return 400;
-  }
-}
+const errToStatus = (error: BillingError): number =>
+  matchType(error, {
+    plan_not_found: () => 404,
+    missing_company_id: () => 422,
+    missing_base_item: () => 409,
+    missing_swap_item: () => 409,
+  });
 
 // Next.js Route Handler
 export async function POST(req: Request) {
@@ -117,6 +114,19 @@ export async function POST(req: Request) {
 
   return Response.json(result.value);
 }
+```
+
+`matchType` is exhaustive by construction, which is the point here: add a variant to `BillingError` and this mapping stops compiling until you give it a status. A `switch` with a `default: return 400` looks tidier and quietly maps every new error to `400` forever.
+
+When you genuinely do want a catch-all, pass it as a **third argument** rather than a `default` branch — it is typed to the variants you left out, so you can still see what is landing there:
+
+```ts
+const errToStatus = (error: BillingError): number =>
+  matchType(error, { plan_not_found: () => 404, missing_company_id: () => 422 }, (e) => {
+    logger.warn({ type: e.type }, 'unmapped billing error');
+    //             ^? the leftover variants only
+    return 400;
+  });
 ```
 
 If a status code is genuinely *intrinsic* to an error (not a presentation choice), carry it inside the typed payload — `details.status` — rather than at the top level, so the four-field shape and its serializability are preserved.

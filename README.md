@@ -202,6 +202,13 @@ On the fluent side, `.isOk()` / `.isErr()` return **plain booleans** and buy you
 | `combineWithAllErrors(results)` | Same, but collects *every* error into an array |
 | `partition(results)` | Split into `[values, errors]` — both halves, always |
 
+**Error matching** — dispatch over a `TypedError` union (see [below](#matching-on-the-error-type))
+
+| | |
+|---|---|
+| `matchType(error, arms)` | One arm per variant, each narrowed. A missing arm is a compile error |
+| `matchType(error, arms, fallback)` | Partial arms; the fallback sees only the **residual** variants |
+
 **Formatters** — presentation over the `TypedError[]` that `combineWithAllErrors` accumulates
 
 | | |
@@ -335,6 +342,49 @@ switch (error.type) {
 ```
 
 Each constructor also carries `.type`, readable without building a value, and a `.is()` guard for narrowing a union at runtime.
+
+### Matching on the error type
+
+`switch (error.type)` narrows, but it is a *statement*, and it is not exhaustive-checked without a `never` helper in the default branch. `matchType` is the expression form, and exhaustiveness is the type — forget a variant and it does not compile:
+
+```ts
+import { matchType } from '@zireal/result-kit';
+
+const status = matchType(error, {
+  not_found: () => 404,
+  forbidden: () => 403,
+  conflict: (e) => (e.details!.slug ? 409 : 400),
+});
+//    ^? number — every arm's return type, unioned
+```
+
+Each arm receives its **own** variant, with its own payload: `conflict`'s `e.details` is `{ slug: string } | undefined`, and reaching for `e.details!.id` there is an error. Add a variant to the union later and every `matchType` call over it lights up until you handle it.
+
+Not every call wants to enumerate everything. Pass a **fallback** as a third argument, and it sees only the variants you did not handle:
+
+```ts
+const status = matchType(error, { not_found: () => 404 }, (e) => {
+  //                                                       ^? forbidden | conflict
+  logUnexpected(e);
+  return 500;
+});
+```
+
+That residual narrowing is the reason for the third parameter rather than a `_` key inside the bag — a `_` sharing the object cannot be narrowed to the leftovers, and would hand you back the variants you just handled.
+
+Two things worth knowing before you reach for it:
+
+- **`details` stays optional.** Narrowing the tag does not make the payload non-optional, so arms read `e.details!.id`. That is a `TypedError` fact, not a `matchType` one.
+- **Only a closed union can be exhausted.** A bare `TypedError` has an open `string` tag, so *any* set of arms satisfies it. Exhaustiveness needs a union of specific variants — the kind `ErrorsOf` or `ReturnType<typeof …> | …` gives you.
+
+Coming from a `Result`, compose it under `match`:
+
+```ts
+const status = match(result, {
+  ok: () => 200,
+  err: (e) => matchType(e, { not_found: () => 404, forbidden: () => 403, conflict: () => 409 }),
+});
+```
 
 ### Presenting accumulated errors
 
