@@ -34,6 +34,13 @@ export {
   type Result,
 } from './core/result';
 export {
+  fromSchema,
+  fromSchemaAsync,
+  type FromSchemaOptions,
+  type ValidationFailed,
+  type ValidationIssue,
+} from './core/schema';
+export {
   match,
   toNullable,
   unwrapOr,
