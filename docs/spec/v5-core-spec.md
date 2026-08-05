@@ -198,6 +198,51 @@ Four constraints, each argued in full in ADR 0010:
 
 > **Recorded because the shape of the mistake recurs.** A first draft of ADR 0010 and of the implementation's own doc comment claimed `prettifyErrors` "does not leak the payload". The test written to assert it **failed**, correctly: `defineError('not_found', (d) => \`No user ${d.id}\`)` puts the payload in `message` before any formatter runs. The narrow claim ("never reads `details`") is true and useful; the broad one was false and would have read as a security property. Pinned by two tests, one for each half.
 
+### 3.5 `matchType` — exhaustive dispatch over an error union
+
+Source: [#64](https://github.com/alifaroo-q/result-kit/issues/64), with the signature locked by the [#73](https://github.com/alifaroo-q/result-kit/issues/73) prototype. Added after the `5.0.0` freeze as a backward-compatible **minor**; nothing here changes an existing signature.
+
+It lives in §3 for §3.4's reason: it operates on a **`TypedError`**, not on a `Result`. Reach it from a `Result` through §5.3's `match` — `match(r, { ok: …, err: (e) => matchType(e, …) })`.
+
+```ts
+type Arms<E extends TypedError> = {
+  [K in E['type']]: (variant: Extract<E, { type: K }>) => unknown;
+};
+type PartialArms<E extends TypedError> = { [K in E['type']]?: (variant: Extract<E, { type: K }>) => unknown };
+type NoStrayArms<E extends TypedError, H> = Record<Exclude<keyof H, E['type']>, never>;
+// all three internal, not exported.
+
+export function matchType<E extends TypedError, H extends Arms<E>>(
+  error: E,
+  handlers: H & NoStrayArms<E, H>,
+): ReturnType<H[keyof H]>;
+export function matchType<E extends TypedError, H extends PartialArms<E>, R>(
+  error: E,
+  handlers: H & NoStrayArms<E, H>,
+  fallback: (variant: Exclude<E, { type: keyof H }>) => R,
+): ReturnType<NonNullable<H[keyof H]>> | R;
+```
+
+```ts
+matchType(error, { not_found: () => 404, forbidden: () => 403, conflict: () => 409 });
+//                                        a missing arm is a compile error
+
+matchType(error, { not_found: () => 404 }, (e) => 500);
+//                                             ^ e: forbidden | conflict
+```
+
+Four constraints, each a prototype finding rather than a style choice:
+
+1. **Never a single naked `U` across the arms.** This is the §5.3 `match` trap in a *worse* form. There, `U` locks to the first inference candidate and the second branch is a hard error; here `U` does not infer at all — the call compiles and the result is silently `unknown`, even when every arm agrees. Inferring the bag `H` and returning `ReturnType<H[keyof H]>` unions the arms' returns and still collapses to one type where they agree.
+2. **`NoStrayArms` is load-bearing.** `H extends Arms<E>` alone is satisfied by a bag with *extra* keys, and object-literal freshness does not fire against a type parameter — so a typo'd tag compiles as a dead arm that never runs. The clause types the stray key as `never`, and the error points at the arm rather than at the call.
+3. **The fallback is a third parameter, not a `_` key in the bag.** A `_` arm sharing the bag cannot be narrowed to the *residual* variants under any formulation tried, currying included: `H` absorbs `_`, the `Exclude` resolves against a not-yet-inferred `H`, and the arm lands on `never`. As its own parameter, the bag's key set is known before the fallback is typed, so it sees exactly what is left. Residual narrowing is the reason to prefer this over `switch`, so the form that cannot deliver it does not ship — §10.9's "typed honestly or not at all" line, applied here.
+4. **It throws when the tag has no arm and no fallback was supplied.** Only reachable by defeating the types (an `as any`, or a value crossing a runtime boundary with a tag its type did not admit), but returning `undefined` under a type promising a value is the silent-failure class this package refuses. The dispatch reads keys with `hasOwnProperty`, not a bare index — a tag of `constructor` or `toString` would otherwise find `Object.prototype`'s member and call it.
+
+Two `TypedError` facts this function makes prominent without causing, both of which belong in the docs beside it:
+
+- **`details` is optional**, so an arm reads `v.details!.id`. Narrowing the *tag* does not make the payload non-optional.
+- **The bare `TypedError` cannot be exhausted.** Its open `string` tag maps to an index signature, so *any* bag satisfies it — `{}` included, which returns `never`. Exhaustiveness is a property of a closed tag union, not of this API. An unresolved `E extends TypedError` inside a generic wrapper degrades the same honest way: no concrete arm satisfies it, and the mapped type says so instead of widening.
+
 ## 4. Architecture
 
 Source: [ADR 0001](../adr/0001-v2-core-api-paradigm.md), [ADR 0005 §1](../adr/0005-v2-async-strategy.md), [ADR 0006](../adr/0006-v2-package-layout-entrypoints.md).
@@ -457,11 +502,12 @@ export type { OkTypeOf, ErrTypeOf };        // §5.4 — see §10
 
 ### 5.9 Complete root export list
 
-**Values (32):**
+**Values (33):**
 
 | Group | Exports |
 |---|---|
 | Constructors & guards (7) | `ok` `err` `isOk` `isErr` `isTypedError` `defineError` `defineErrors` |
+| Error matching (1) | `matchType` |
 | Formatters (2) | `groupByType` `prettifyErrors` |
 | Transforms (6) | `map` `mapErr` `andThen` `orElse` `inspect` `inspectErr` |
 | Terminals (5) | `match` `unwrapOr` `unwrapOrElse` `unwrapOrThrow` `toNullable` |

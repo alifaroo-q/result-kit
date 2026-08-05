@@ -25,6 +25,7 @@ import {
   isOk,
   map,
   match,
+  matchType,
   ok,
   partition,
   prettifyErrors,
@@ -310,4 +311,49 @@ export function missingIds(ids: readonly string[]): readonly string[] {
 
   //         ↓ NotFound[] | undefined — `details` is this variant's own payload
   return groups.not_found?.map((e) => e.details?.id ?? 'unknown') ?? [];
+}
+
+/* -------------------------------------------------------------------------- */
+/* Dispatching on the error type                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `matchType` is the expression form of `switch (error.type)`, and it is
+ * **exhaustive by construction** — drop an arm and this stops compiling.
+ *
+ * Each arm receives its *own* variant, so `overdrawn`'s `details` is
+ * `{ short: number } | undefined` while `forbidden`'s is `undefined`. Narrowing
+ * the tag does not make the payload non-optional, which is why the arms reach
+ * for `?.` rather than assuming.
+ */
+export function statusFor(error: NotFound | Forbidden | Overdrawn): number {
+  return matchType(error, {
+    not_found: () => 404,
+    forbidden: () => 403,
+    overdrawn: (e) => ((e.details?.short ?? 0) > 100 ? 402 : 409),
+  });
+}
+
+/**
+ * The catch-all is a **third parameter**, not a `_` key in the bag — that is
+ * what lets it see only the variants left unhandled. Here it is
+ * `Forbidden | Overdrawn`, and `not_found` is deliberately absent from it.
+ */
+export function statusForLoosely(
+  error: NotFound | Forbidden | Overdrawn,
+): number {
+  return matchType(error, { not_found: () => 404 }, (leftover) => {
+    //                                               ↑ Forbidden | Overdrawn
+    const tag: 'forbidden' | 'overdrawn' = leftover.type;
+
+    return tag === 'forbidden' ? 403 : 409;
+  });
+}
+
+/** The idiomatic pairing: `match` leaves the `Result`, `matchType` dispatches. */
+export function respond(id: string): number {
+  return match(findUser(id), {
+    ok: () => 200,
+    err: (error) => statusFor(error),
+  });
 }
