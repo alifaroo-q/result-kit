@@ -74,15 +74,51 @@ const NO_ARM = 'matchType: no handler for error type';
  *    not ship, the same "typed honestly or not at all" line §10.9 draws.
  *
  * @remarks
- * Two facts about `TypedError` that this function makes prominent without
- * causing:
+ * **An arm counts only if the bag *owns* it.** The lookup goes through
+ * `Object.prototype.hasOwnProperty.call`, which is what makes an error tagged
+ * `constructor` or `toString` report a gap rather than quietly invoking
+ * `Object.prototype`'s member and passing its return value off as the answer.
+ * Reading the guard off `Object.prototype` rather than calling
+ * `handlers.hasOwnProperty(...)` matters twice over: a bag built with
+ * `Object.create(null)` has no such method, and a union with a
+ * `hasOwnProperty` variant would otherwise have its own arm invoked *as the
+ * guard*. Two consequences follow, and both are deliberate:
+ *
+ * - An arm inherited from a prototype — a class-instance bag — is **not**
+ *   offered, and the call throws. Structurally legal, and refused: the trade is
+ *   a loud error on an exotic input in exchange for never treating an inherited
+ *   member as a handler.
+ * - `{ __proto__: fn }` sets the bag's *prototype* instead of adding a key, so
+ *   that arm is likewise not offered. The computed form, `{ ['__proto__']: fn }`,
+ *   stores a real own property and works.
+ *
+ * **Arms are called unbound**, so `this` inside a method-shorthand arm is
+ * `undefined`. This differs from §5.3's `match`, which invokes `cases.ok(...)`
+ * and so leaves `this` bound to the case bag. A handler bag is data, not an
+ * object with methods; the divergence is pinned by a test rather than left to
+ * chance.
+ *
+ * Facts about `TypedError` that this function makes prominent without causing —
+ * each one a call that compiles and does less than it appears to:
  *
  * - **`details` is optional**, so an arm reads `v.details!.id`. Narrowing the
  *   *tag* does not make the payload non-optional.
  * - **The bare `TypedError` cannot be exhausted.** Its open `string` tag maps
  *   to an index signature, so *any* bag satisfies it — `{}` included, which
- *   returns `never`. Exhaustiveness is a property of a closed tag union, not of
- *   this API.
+ *   returns `never` (and throws, which is the same statement twice). This bites
+ *   hardest in a *mixed* union: one bare `TypedError` alongside good literal
+ *   variants opens the whole tag to `string` and exhaustiveness is gone.
+ * - **A variant whose tag is itself a union is one variant, not several.**
+ *   `TypedError<'a' | 'b'>` is not assignable to `{ type: 'a' }`, so
+ *   `Extract` finds nothing and both arms are typed `(v: never) => unknown` —
+ *   every arm satisfies that, and the payload is unreachable. Declare two
+ *   variants instead.
+ * - **One `any` arm widens the whole result to `any`**, since the returns are
+ *   unioned and `any` absorbs a union. The no-`any` property is about what this
+ *   signature introduces, not about what a caller can hand it.
+ * - **A generic wrapper cannot supply arms**, even one constrained to the whole
+ *   union (`<E extends AppError>`): `Arms<E>` stays deferred. Widen at the call
+ *   — `matchType(error as AppError, …)` — rather than fighting it.
  *
  * @throws {Error} when the tag has no arm and no fallback was supplied. Only
  * reachable by defeating the types (an `as any` cast, or a value crossing a
