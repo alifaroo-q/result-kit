@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
-import { expectErr, expectOk, ok, err } from '../../src/index';
+import { defineError, expectErr, expectOk, ok, err } from '../../src/index';
 import type { Result } from '../../src/index';
 
 const launder = <T, E>(r: Result<T, E>): Result<T, E> => r;
@@ -24,10 +24,15 @@ describe('expectOk', () => {
     );
   });
 
-  it('throws with JSON-stringified payload on Err', () => {
+  it('throws with the prettified error on Err', () => {
+    // This test previously asserted `JSON.stringify(error)` verbatim. #67 is
+    // precisely the decision to stop doing that for a §3-shaped payload, so the
+    // expectation moves with it — a non-typed payload still round-trips through
+    // `JSON.stringify` unchanged, which the case above and the group at the
+    // bottom of this file both pin.
     const error = { type: 'not_found', message: 'User not found' };
     expect(() => expectOk(err(error))).toThrow(
-      'Expected Ok, got Err: ' + JSON.stringify(error),
+      'Expected Ok, got Err:\n  ✖ not_found: User not found',
     );
   });
 });
@@ -128,5 +133,88 @@ describe('root barrel surface', () => {
 
     expect(Object.keys(surface)).toContain('expectOk');
     expect(Object.keys(surface)).toContain('expectErr');
+  });
+});
+
+describe('expectOk / expectErr — typed errors read as prose (#67)', () => {
+  // The motivation is one sentence: a wrong-branch failure should be
+  // diagnosable from the test output, without going back to add a console.log.
+  // That means the `✖ type: message` summary *and* the payload — `details` is
+  // exactly the thing the console.log would have printed.
+  const notFound = defineError(
+    'not_found',
+    (d: { id: string }) => `No user ${d.id}`,
+  );
+  const forbidden = defineError('forbidden', 'Not permitted');
+
+  it('expectOk_errCarryingATypedError_showsTheLineAndTheDetails', () => {
+    expect(() => expectOk(err(notFound({ id: 'u1' })))).toThrow(
+      'Expected Ok, got Err:\n' +
+        '  ✖ not_found: No user u1\n' +
+        '    details: {"id":"u1"}',
+    );
+  });
+
+  it('expectOk_errCarryingAPayloadlessVariant_staysOneLine', () => {
+    expect(() => expectOk(err(forbidden()))).toThrow(
+      'Expected Ok, got Err:\n  ✖ forbidden: Not permitted',
+    );
+  });
+
+  it('expectOk_errCarryingAccumulatedErrors_listsThemAll', () => {
+    // The `combineWithAllErrors` shape. Reading this as one line of JSON was
+    // the case that motivated handling the array at all.
+    expect(() =>
+      expectOk(err([notFound({ id: 'u1' }), forbidden()])),
+    ).toThrow(
+      'Expected Ok, got Err:\n' +
+        '  ✖ not_found: No user u1\n' +
+        '    details: {"id":"u1"}\n' +
+        '  ✖ forbidden: Not permitted',
+    );
+  });
+
+  it('expectErr_okCarryingATypedError_prettifiesSymmetrically', () => {
+    // Unusual, but the rule is one rule: the renderer does not ask which half
+    // it is on. An asymmetry here would be a second thing to remember for no
+    // gain.
+    expect(() => expectErr(ok(notFound({ id: 'u1' })))).toThrow(
+      'Expected Err, got Ok:\n' +
+        '  ✖ not_found: No user u1\n' +
+        '    details: {"id":"u1"}',
+    );
+  });
+
+  it('expectOk_errCarryingANonTypedError_isUnchanged', () => {
+    // The guardrail on the whole change: only §3-shaped payloads move. If this
+    // ever goes multi-line, the change stopped being additive.
+    expect(() => expectOk(err('boom'))).toThrow('Expected Ok, got Err: "boom"');
+    expect(() => expectOk(err({ id: 'u1' }))).toThrow(
+      'Expected Ok, got Err: {"id":"u1"}',
+    );
+  });
+
+  it('expectOk_errCarryingATypedErrorWithACause_namesTheUnderlyingError', () => {
+    // `cause` usually holds the original throw, and `JSON.stringify` renders a
+    // real Error as `{}` — so the one field that answers "why" was invisible.
+    const wrapped = {
+      type: 'db_failed',
+      message: 'Query failed',
+      cause: new TypeError('conn reset'),
+    };
+
+    expect(() => expectOk(err(wrapped))).toThrow(
+      'Expected Ok, got Err:\n' +
+        '  ✖ db_failed: Query failed\n' +
+        '    cause: TypeError: conn reset',
+    );
+  });
+
+  it('expectOk_stillReturnsTheValueForATypedErrorShapedOk', () => {
+    // Nothing is rendered when the assertion holds — the dispatch must not
+    // reach the success path.
+    const value = notFound({ id: 'u1' });
+
+    expect(expectOk(ok(value))).toBe(value);
   });
 });

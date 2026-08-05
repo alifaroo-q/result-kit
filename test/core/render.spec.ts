@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { renderPayload } from '../../src/core/render';
+import { prettifyErrors } from '../../src/core/format';
+import { renderDiagnostic, renderPayload } from '../../src/core/render';
 
 /**
  * `renderPayload` is internal (not in §5.9's export list), but it is the single
@@ -267,6 +268,25 @@ describe('renderPayload — surprising input', () => {
     expect(renderPayload(value)).toBe(renderPayload(value));
   });
 
+  it('renderPayload_proxyThatThrowsOnEveryRead_doesNotEscapeTheModule', () => {
+    // The `catch` calls `describe`, and `describe`'s last-resort
+    // `Object.prototype.toString` reads `Symbol.toStringTag` — through the
+    // `get` trap. So the handler that exists to stop a serializer crash was
+    // itself the crash. Reached via `renderDiagnostic` first; pinned here too
+    // because it is `renderPayload`'s own "never throws" invariant that broke.
+    const exploding = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error('nope');
+        },
+      },
+    );
+
+    expect(() => renderPayload(exploding)).not.toThrow();
+    expect(renderPayload(exploding)).toBe('[unrenderable object]');
+  });
+
   it('renderPayload_doesNotMutateItsInput', () => {
     const value = { type: 'x', nested: { id: 1n } };
     const snapshot = { type: 'x', nested: { id: 1n } };
@@ -274,5 +294,189 @@ describe('renderPayload — surprising input', () => {
     renderPayload(value);
 
     expect(value).toEqual(snapshot);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderDiagnostic — the §3-aware layer (#67)
+// ---------------------------------------------------------------------------
+
+/**
+ * `renderDiagnostic` adds one thing to `renderPayload`: a `TypedError` reads as
+ * a `✖ type: message` block instead of a line of JSON. Everything it does not
+ * recognise must fall through **byte-identically**, which is what keeps the
+ * change additive rather than a rewording of every failure message in the
+ * package. That fallthrough is the first group below and it is the important
+ * one.
+ */
+
+describe('renderDiagnostic — fallthrough is byte-identical', () => {
+  const notAnError: [label: string, value: unknown][] = [
+    ['a string', 'boom'],
+    ['a number', 42],
+    ['null', null],
+    ['undefined', undefined],
+    ['a plain object', { id: 'u1' }],
+    ['a real Error', new Error('kaboom')],
+    ['a BigInt', 10n],
+    ['a symbol', Symbol('session')],
+    ['an array of plain objects', [{ a: 1 }, { b: 2 }]],
+    // `type` is a string but `message` is missing — not a TypedError per §3.
+    ['a tag-only object', { type: 'not_found' }],
+    // `message` is present but not a string.
+    ['a bad-message object', { type: 'not_found', message: 404 }],
+    // §3 requires `details` to be a non-null, non-array object when present.
+    ['a typed error with array details', { type: 'x', message: 'm', details: [1] }],
+    // Mixed arrays are not the accumulation shape, so they stay JSON.
+    ['a mixed array', [{ type: 'x', message: 'm' }, 'boom']],
+  ];
+
+  it.each(notAnError)(
+    'renderDiagnostic_%s_matchesRenderPayloadExactly',
+    (_l, value) => {
+      expect(renderDiagnostic('P', value)).toBe(`P: ${renderPayload(value)}`);
+    },
+  );
+
+  it('renderDiagnostic_emptyArray_doesNotRenderAnEmptyBlock', () => {
+    // `[]` vacuously satisfies "every element is a TypedError", and
+    // `prettifyErrors([])` is `''` by design — so without the length guard this
+    // is the string `P:` and nothing else. `[]` says strictly more.
+    expect(renderDiagnostic('P', [])).toBe('P: []');
+  });
+});
+
+describe('renderDiagnostic — typed errors', () => {
+  it('renderDiagnostic_typedErrorWithDetails_showsTheLineAndThePayload', () => {
+    const error = {
+      type: 'not_found',
+      message: 'No user u1',
+      details: { id: 'u1' },
+    };
+
+    expect(renderDiagnostic('Expected Ok, got Err', error)).toBe(
+      'Expected Ok, got Err:\n' +
+        '  ✖ not_found: No user u1\n' +
+        '    details: {"id":"u1"}',
+    );
+  });
+
+  it('renderDiagnostic_typedErrorWithoutDetails_staysOneLine', () => {
+    // A no-payload variant must not grow an empty `details:` line.
+    expect(
+      renderDiagnostic('P', { type: 'forbidden', message: 'Access denied' }),
+    ).toBe('P:\n  ✖ forbidden: Access denied');
+  });
+
+  it('renderDiagnostic_typedErrorWithCause_namesTheUnderlyingError', () => {
+    // `cause` is the field that answers "why", and it usually holds a real
+    // Error — which `JSON.stringify` renders as `{}`. `renderPayload` is what
+    // stops that here.
+    const error = {
+      type: 'db_failed',
+      message: 'Query failed',
+      cause: new TypeError('conn reset'),
+    };
+
+    expect(renderDiagnostic('P', error)).toBe(
+      'P:\n  ✖ db_failed: Query failed\n    cause: TypeError: conn reset',
+    );
+  });
+
+  it('renderDiagnostic_typedErrorWithHostileDetails_stillRenders', () => {
+    const details: Record<string, unknown> = { id: 'u1' };
+    details.self = details;
+
+    const out = renderDiagnostic('P', {
+      type: 'not_found',
+      message: 'No user u1',
+      details,
+    });
+
+    expect(out).toContain('✖ not_found: No user u1');
+    expect(out).toContain('[Circular]');
+  });
+
+  it('renderDiagnostic_typedErrorArray_rendersOneBlockEach', () => {
+    // The `combineWithAllErrors` shape (§5.4) — the whole accumulation story
+    // arrives as a flat array, and this is what a failing test of one looks
+    // like.
+    const errors = [
+      { type: 'not_found', message: 'No user u1', details: { id: 'u1' } },
+      { type: 'forbidden', message: 'Not permitted' },
+    ];
+
+    expect(renderDiagnostic('Expected Ok, got Err', errors)).toBe(
+      'Expected Ok, got Err:\n' +
+        '  ✖ not_found: No user u1\n' +
+        '    details: {"id":"u1"}\n' +
+        '  ✖ forbidden: Not permitted',
+    );
+  });
+
+  it('renderDiagnostic_typedErrorLine_isPrettifyErrorsOutput', () => {
+    // The `✖` form is defined once, in §3.4. If `prettifyErrors` changes, this
+    // message changes with it — that is the point of delegating rather than
+    // reimplementing the line here.
+    const error = { type: 'not_found', message: 'No user u1' };
+
+    expect(renderDiagnostic('P', error)).toContain(prettifyErrors([error]));
+  });
+});
+
+describe('renderDiagnostic — never throws', () => {
+  // The dispatch reads `type`, `message`, `details` and `cause` *before*
+  // `renderPayload`'s own try/catch is reached, so it needs its own. A
+  // diagnostic that crashes instead of diagnosing is the failure this whole
+  // module exists to prevent.
+  const hostile: [label: string, make: () => unknown][] = [
+    [
+      'a throwing `type` getter',
+      () => ({
+        get type(): string {
+          throw new Error('nope');
+        },
+        message: 'm',
+      }),
+    ],
+    [
+      'a throwing `details` getter',
+      () => ({
+        type: 'x',
+        message: 'm',
+        get details(): unknown {
+          throw new Error('nope');
+        },
+      }),
+    ],
+    [
+      'a throwing `cause` getter',
+      () => ({
+        type: 'x',
+        message: 'm',
+        get cause(): unknown {
+          throw new Error('nope');
+        },
+      }),
+    ],
+    [
+      'a Proxy that explodes on every read',
+      () =>
+        new Proxy(
+          {},
+          {
+            get() {
+              throw new Error('nope');
+            },
+          },
+        ),
+    ],
+  ];
+
+  it.each(hostile)('renderDiagnostic_%s_returnsAStringAnyway', (_l, make) => {
+    const value = make();
+
+    expect(() => renderDiagnostic('P', value)).not.toThrow();
+    expect(renderDiagnostic('P', value)).toMatch(/^P: \S/);
   });
 });

@@ -584,11 +584,15 @@ describe('failure messages', () => {
 
   it('toBeOk_errCarryingATypedError_rendersTheWholeErrorNotJustItsTag', () => {
     // The wrong-branch message is the diagnostic that matters most, so it must
-    // carry the payload. #67 will prettify it; this pins that it is not empty
-    // in the meantime.
-    expect(() => expect(err(notFound({ id: 'u1' }))).toBeOk()).toThrow(
-      'Expected Ok, got Err: ' + JSON.stringify(notFound({ id: 'u1' })),
-    );
+    // carry the payload. This asserted the interim `JSON.stringify` form and
+    // said in its own comment that #67 would replace it; the exact wording now
+    // lives in the "#67" group at the bottom of this file, so what is left here
+    // is the durable claim — the tag alone is not enough.
+    const message = messageOf(() => expect(err(notFound({ id: 'u1' }))).toBeOk());
+
+    expect(message).toContain('not_found');
+    expect(message).toContain('User u1 not found');
+    expect(message).toContain('u1');
   });
 
   it('everyMatcherFailure_producesANonEmptyMessage', () => {
@@ -810,5 +814,73 @@ describe('the matcher bag', () => {
     for (const matcher of Object.values(resultMatchers)) {
       expect(typeof matcher).toBe('function');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #67 — the enrichment arrives by delegation
+// ---------------------------------------------------------------------------
+
+/**
+ * The claim `src/testing/index.ts` has made since #63: because every
+ * wrong-branch message is *delegated* to `expectOk` / `expectErr`, enriching
+ * those reaches the matchers with no edit under `src/testing/`. #67 is the
+ * first real test of that claim, and these are what make it a fact rather than
+ * a comment — the whole group would still be needed if someone "helpfully"
+ * inlined a message back into a matcher.
+ */
+describe('prettified typed errors reach the matchers unedited', () => {
+  const block =
+    'Expected Ok, got Err:\n' +
+    '  ✖ not_found: User u1 not found\n' +
+    '    details: {"id":"u1"}';
+
+  it('toBeOk_errCarryingATypedError_showsThePrettifiedBlock', () => {
+    expect(() => expect(err(notFound({ id: 'u1' }))).toBeOk()).toThrow(block);
+  });
+
+  it('toBeOkWith_errCarryingATypedError_showsThePrettifiedBlock', () => {
+    // Wrong-branch still beats wrong-payload, and now the wrong-branch message
+    // is the rich one — which is what made that precedence worth keeping.
+    expect(() =>
+      expect(err(notFound({ id: 'u1' }))).toBeOkWith('anything'),
+    ).toThrow(block);
+  });
+
+  it('toBeErr_negatedOnAnErr_showsThePrettifiedBlock', () => {
+    // The `.not` direction reaches the same delegated message through the
+    // opposite arm, so the enrichment must not be polarity-dependent.
+    expect(() => expect(err(notFound({ id: 'u1' }))).not.toBeErr()).toThrow(
+      block,
+    );
+  });
+
+  it('toBeErr_okCarryingANonTypedValue_isUnchanged', () => {
+    // The guardrail: only §3-shaped payloads moved. Every other matcher
+    // message is byte-for-byte what #63 shipped.
+    expect(messageOf(() => expect(ok(1)).toBeErr())).toBe(
+      'Expected Err, got Ok: 1',
+    );
+  });
+
+  it('toBeOk_errCarryingAWireRoundTrippedTypedError_prettifiesToo', () => {
+    // §2.1's round-trip strips nothing a typed error needs, so the message a
+    // consumer sees for an error that crossed a boundary is the same one.
+    expect(() => expect(err(overTheWire(notFound({ id: 'u1' })))).toBeOk()).toThrow(
+      block,
+    );
+  });
+
+  it('asResult_guardMessage_staysASingleLineSentence', () => {
+    // The one message that deliberately did *not* follow: the guard reports a
+    // subject that is not a Result at all, inside a sentence. A block there
+    // would read as a broken sentence and would be answering a different
+    // question.
+    const message = messageOf(() =>
+      (expect(notFound({ id: 'u1' })) as { toBeOk: () => void }).toBeOk(),
+    );
+
+    expect(message).not.toContain('\n');
+    expect(message).toContain('expected a Result');
   });
 });

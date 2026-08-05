@@ -59,10 +59,14 @@ type MatcherOutcome = {
  *
  * Callers pass the branch that is **guaranteed** to throw — `expectErr` on a
  * known `Ok`, `expectOk` on a known `Err` — which is what lets every message
- * below be delegated rather than authored. When
- * [#67](https://github.com/alifaroo-q/result-kit/issues/67) enriches
- * `expectOk` / `expectErr` with `prettifyErrors` output, these matchers inherit
- * it with no edit here.
+ * below be delegated rather than authored. That paid off exactly as predicted:
+ * [#67](https://github.com/alifaroo-q/result-kit/issues/67) enriched
+ * `expectOk` / `expectErr` with prettified `TypedError` output and the matchers
+ * inherited it with **no edit in this file** — only a test asserting they did.
+ *
+ * A delegated message may now be **multi-line**. Nothing here needs to care —
+ * vitest prints the string as given — but do not "tidy" it into one line: the
+ * block form is the feature.
  */
 function thrownMessage(assertion: () => unknown): string {
   try {
@@ -113,10 +117,17 @@ function isResultLike(x: unknown): x is Result<unknown, unknown> {
  * `expect(42).not.toBeOk()` *succeed*, quietly reporting green about a subject
  * the matcher never understood. A throw fails in both directions.
  *
- * The subject is rendered by the core {@link renderPayload}, the same function
- * the delegated wrong-branch messages use. This guard carried its own hardened
- * copy until the *delegated* path was found to be un-hardened — so there is one
- * home now, and the next fix lands on both.
+ * The subject is rendered by the core {@link renderPayload}. This guard carried
+ * its own hardened copy until the *delegated* path was found to be un-hardened —
+ * so there is one home now, and the next fix lands on both.
+ *
+ * It stays on `renderPayload` rather than following the wrong-branch messages
+ * up to `renderDiagnostic`, and the split is deliberate. This string is a
+ * *sentence* — "expected a Result … but received X" — so a multi-line block
+ * would read as a broken sentence, and the subject here is by definition not a
+ * `Result` at all, which makes prettifying it as a §3 error a category error
+ * twice over: it says "this is not the shape I wanted", not "here is why your
+ * error happened".
  */
 function asResult(
   received: unknown,
