@@ -39,7 +39,7 @@ pnpm add @zireal/result-kit
 
 ## The two surfaces
 
-Both are first-class and fully supported. Pick per project, or mix per file.
+Both are first-class and fully supported. Pick per project, or mix per file. (A third entrypoint, [`/testing`](#vitest-matchers--zirealresult-kittesting), is test-only sugar rather than a way to write `Result` code.)
 
 | | `@zireal/result-kit/fluent` | `@zireal/result-kit` |
 |---|---|---|
@@ -383,6 +383,39 @@ const error = expectErr(await failingCall());
 expect(error.type).toBe('not_found');
 ```
 
+### Vitest matchers — `@zireal/result-kit/testing`
+
+An **optional** subpath with four `Result`-aware matchers. `vitest` is an optional peer dependency: it is never installed on your behalf, and nothing in your production bundle references it.
+
+Register them once, in a setup file:
+
+```ts
+// vitest.setup.ts
+import { expect } from 'vitest';
+import { resultMatchers } from '@zireal/result-kit/testing';
+
+expect.extend(resultMatchers);
+```
+
+Then:
+
+```ts
+expect(await loadPlan(id)).toBeOk();
+expect(await loadPlan(id)).toBeOkWith({ kind: 'noop' });
+
+expect(await loadPlan(bad)).toBeErr();
+expect(await loadPlan(bad)).toBeErrWith(missingBaseItem());
+
+// partial matching is vitest's own, not a separate matcher
+expect(await loadPlan(bad)).toBeErrWith(
+  expect.objectContaining({ type: 'missing_base_item' }),
+);
+```
+
+Both `*With` matchers are **deep equality**, and a wrong-branch failure reports the branch you actually got — `Expected Ok, got Err: {"type":"missing_base_item",…}` — rather than a diff against the wrong half.
+
+The matchers **assert**; they do not narrow, because a Vitest matcher cannot. Keep using `expectOk` / `expectErr` when you need the value afterwards.
+
 See [`RECIPES.md`](RECIPES.md#testing-code-that-returns-result) for the full testing recipe.
 
 ---
@@ -392,6 +425,8 @@ See [`RECIPES.md`](RECIPES.md#testing-code-that-returns-result) for the full tes
 The root entrypoint is a flat barrel of standalone functions and the package is marked `sideEffects: false`. Import `map` and you ship `map`.
 
 The fluent wrapper lives behind `/fluent` and is **never** reachable from the root bundle. That boundary is enforced by an automated test which inspects the built output — not by convention, and not by review. If you never import `/fluent`, no wrapper code reaches your bundle.
+
+The same test covers `/testing`: no matcher code reaches the root bundle, and the shipped `/testing` chunk imports **no** bare specifier at all — so the optional `vitest` peer is never resolved by this package.
 
 ---
 

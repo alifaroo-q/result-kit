@@ -1,7 +1,8 @@
 import { defineConfig } from 'tsdown';
 
 export default defineConfig({
-  // Spec §7.2: exactly two code entrypoints, `.` and `./fluent`. The keys are
+  // Spec §7.2 named two code entrypoints, `.` and `./fluent`; `./testing`
+  // is the additive third, decided by ADR 0014 §1 and shipped in #63. The keys are
   // output paths, so `fluent/index` emits `dist/fluent/index.js` — the path
   // §7.2's `exports` block names. These and `package.json`'s `exports` are
   // updated **together** (CLAUDE.md's new-entrypoint rule); `exports` is
@@ -13,6 +14,7 @@ export default defineConfig({
   entry: {
     index: 'src/index.ts',
     'fluent/index': 'src/fluent/index.ts',
+    'testing/index': 'src/testing/index.ts',
   },
   format: ['esm'],
   dts: true,

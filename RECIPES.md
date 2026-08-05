@@ -147,3 +147,31 @@ expect(value.items).toHaveLength(2);
 const error = expectErr(await failingCall());
 expect(error.type).toBe('not_found');
 ```
+
+### Matchers, if you are on Vitest
+
+`@zireal/result-kit/testing` adds `toBeOk` / `toBeOkWith` / `toBeErr` / `toBeErrWith`. `vitest` is an *optional* peer dependency — declared, never installed on your behalf, and absent from the shipped chunk's imports.
+
+```ts
+// vitest.setup.ts
+import { expect } from 'vitest';
+import { resultMatchers } from '@zireal/result-kit/testing';
+
+expect.extend(resultMatchers);
+```
+
+```ts
+expect(await changeSubscriptionPlan(input)).toBeOkWith({ kind: 'noop' });
+expect(await changeSubscriptionPlan(bad)).toBeErrWith(missingBaseItem());
+expect(await changeSubscriptionPlan(bad)).toBeErrWith(
+  expect.objectContaining({ type: 'missing_base_item' }),
+);
+```
+
+Three things worth knowing before you reach for them:
+
+- **They do not replace `toEqual`.** `expect(r).toEqual(err(missingBaseItem()))` is still correct and still reads well; the matchers buy a better failure message on the *wrong branch* — `Expected Ok, got Err: {…}` instead of a diff between two dissimilar objects.
+- **They do not narrow.** A Vitest matcher cannot say anything about its subject's type, so `expectOk` / `expectErr` remain the way to read `.value` afterwards.
+- **`toBeOkWith` / `toBeErrWith` are deep equality**, symmetric on both halves. Partial matching is Vitest's own `expect.objectContaining`, which they honour — there is no third matcher to learn.
+
+On Jest, or on any other runner, `expectOk` / `expectErr` above are the supported path; the matchers are Vitest-only for now.

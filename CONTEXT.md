@@ -60,6 +60,10 @@ _Avoid_: groupBy, byType, format (that's the zod-v3 name for a *tree*, which we 
 The formatter that renders an accumulated `TypedError[]` as one human-readable line per error — `✖ <type>: <message>`. Reads **type** and **message** only, never **details**; an empty input gives an empty string rather than a placeholder, so the output composes into a larger message. Not a redaction mechanism: a variant's **message** may already have been computed from its payload.
 _Avoid_: prettifyError (zod's name; ours takes the array, not an error object), format, toString, render, stringify.
 
+**resultMatchers**:
+The `/testing` entrypoint's bag of four Vitest matchers — `toBeOk` / `toBeOkWith` / `toBeErr` / `toBeErrWith` — handed to `expect.extend` explicitly, never registered by importing. They **assert** a branch; they do not narrow, which is the line between them and **expectOk** / **expectErr**, the free functions that **extract**. Every failure message is delegated to those two rather than authored in the matcher. Both `*With` forms are deep equality; partial matching is Vitest's own `expect.objectContaining`, which they honour.
+_Avoid_: toBeErrMatching (the filed name; subset matching turned out to be Vitest's job, not a matcher of ours), toBeSuccess / toBeFailure (v1 vocabulary), "the testing helpers" for **expectOk** / **expectErr**, which live on the **root barrel** and need no runner.
+
 ## Relationships
 
 - A failed **Result** carries an `error` of type `E`; when the producer opts into the convention, that `E` is a **TypedError**.
@@ -68,6 +72,7 @@ _Avoid_: prettifyError (zod's name; ours takes the array, not an error object), 
 - **ResultChain** and **ResultAsync** wrap a **Result**; `.toResult()` is the way back out, and the plain union is what crosses a boundary. `.toAsync()` is the one explicit seam from the sync wrapper to the async one.
 - **safeTry** consumes what **safeUnwrap** (or a self-iterable wrapper) yields. The two are always used together: **safeUnwrap** only ever appears inside a **safeTry** block.
 - **combineWithAllErrors** produces the accumulated `TypedError[]` that **groupByType** and **prettifyErrors** consume, and is their motivating source. It is not the only one: `partition`'s second half is also an error array, and is equally valid input.
+- **resultMatchers** delegates every failure message to **expectOk** / **expectErr**, so the two are one wording with two call shapes rather than two surfaces to keep in sync.
 - The wrappers are **opt-in ergonomics**, never a requirement — the free-function core is self-sufficient and never needs `/fluent`. That split is what makes the core tree-shakable.
 
 ## Example dialogue
