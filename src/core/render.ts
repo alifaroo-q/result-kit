@@ -47,11 +47,19 @@ import { prettifyErrors } from './format';
  * rather than a string. Sending those through {@link describe} directly is what
  * keeps `undefined` rendering as bare `undefined` — the wording the existing
  * message already had — rather than as a quoted `"undefined"`.
+ *
+ * **The `instanceof` runs inside a `try`, and that is not defensive.**
+ * `instanceof` reads the value's prototype, which a `Proxy` traps
+ * (`getPrototypeOf`) and a *revoked* `Proxy` refuses outright. This function is
+ * called on {@link renderPayload}'s first line — before that function's own
+ * `try` exists — so a throw here escaped the module entirely, which is the one
+ * thing it promises never to do. The `get`-trap version of this hole was closed
+ * inside {@link describe}; this is the same hole one trap over, and on the route
+ * *into* it. A value that will not admit its prototype cannot be shown to be an
+ * `Error`, and cannot be serialized either, so it takes the `describe` route —
+ * which has its own `try` and answers `[unrenderable object]`.
  */
 function isRenderableAsJson(value: unknown): boolean {
-  if (value === null) return true;
-  if (value instanceof Error) return false;
-
   switch (typeof value) {
     case 'undefined':
     case 'bigint':
@@ -59,8 +67,44 @@ function isRenderableAsJson(value: unknown): boolean {
     case 'function':
       return false;
     default:
-      return true;
+      break;
   }
+
+  if (value === null) return true;
+
+  try {
+    return !(value instanceof Error);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Collapses the line breaks out of a rendered fragment.
+ *
+ * {@link renderPayload} promises a **single line**, and two callers read that
+ * literally: `asResult`'s guard message in `/testing` is a *sentence*, and
+ * {@link renderTypedError} builds a line-structured block whose `details:` and
+ * `cause:` lines are one line each. Everything `JSON.stringify` produces already
+ * honours it — it escapes a newline inside a string — but {@link describe} does
+ * not go through `stringify`, and every one of its arms interpolates
+ * caller-authored text: an `Error`'s `message`, a symbol's description, a
+ * function's name, a `Symbol.toStringTag`. An `Error` message spanning lines is
+ * ordinary (a query, an aggregated report), and `stack` was already left out for
+ * exactly this reason — a multi-line `message` is the same hazard arriving
+ * through a different field.
+ *
+ * **The backslash is escaped first, and it has to be.** Escaping only the line
+ * break would render `Error('a\nb')` and `Error('a\\nb')` — two distinguishable
+ * payloads — identically, trading one of this module's two invariants for the
+ * other. Doubling the backslash also matches how a plain string already renders
+ * here, since `JSON.stringify` does the same.
+ */
+function oneLine(text: string): string {
+  return text
+    .replace(/\\/g, '\\\\')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r');
 }
 
 /**
@@ -72,46 +116,59 @@ function isRenderableAsJson(value: unknown): boolean {
  *
  * **This is the last resort, so it is the one function that must not fail** —
  * it is what {@link renderPayload}'s `catch` calls, and a throw here escapes the
- * module with nothing left to catch it. Every branch below touches the value in
- * a way a `Proxy` can trap: `instanceof` (`getPrototypeOf`), `name` / `message`
- * (`get`), and — the one actually observed — `Object.prototype.toString`, which
- * reads `Symbol.toStringTag` through the `get` trap. So the whole inspection
- * runs inside a `try`, and a value that refuses even to describe itself gets a
- * name for that fact rather than crashing the diagnostic.
+ * module with nothing left to catch it. Every branch of {@link inspect} touches
+ * the value in a way a `Proxy` can trap: `instanceof` (`getPrototypeOf`),
+ * `name` / `message` (`get`), and — the one actually observed —
+ * `Object.prototype.toString`, which reads `Symbol.toStringTag` through the
+ * `get` trap. So the whole inspection runs inside a `try`, and a value that
+ * refuses even to describe itself gets a name for that fact rather than
+ * crashing the diagnostic.
  *
  * Found by `renderDiagnostic_a Proxy that explodes on every read_…`, not by
  * review: the original comment here already argued that `String` was unsafe as
- * a fallback, and then closed only part of the gap it had named.
+ * a fallback, and then closed only part of the gap it had named. It closed only
+ * part of *this* one too — {@link isRenderableAsJson} runs the same `instanceof`
+ * one step upstream, outside every `try` there was, so the hardening had to
+ * happen twice.
  */
 function describe(value: unknown): string {
   if (value === undefined) return 'undefined';
   if (value === null) return 'null';
 
   try {
-    if (value instanceof Error) {
-      // `name` and `message` are non-enumerable, so this is the only way they
-      // reach the message at all. `stack` is deliberately left out — it is
-      // multi-line and would bury the one line the caller is reading.
-      return `${value.name}: ${value.message}`;
-    }
-
-    switch (typeof value) {
-      case 'bigint':
-        // The `n` suffix keeps `10n` distinguishable from the number `10`,
-        // which is the whole reason a caller reached for a BigInt.
-        return `${value}n`;
-      case 'symbol':
-        return value.toString();
-      case 'function':
-        return `[Function: ${value.name || 'anonymous'}]`;
-      default:
-        return Object.prototype.toString.call(value);
-    }
+    return oneLine(inspect(value));
   } catch {
     // `typeof` is the one thing no trap can intercept, so it is all that is
     // left to say — and saying it still distinguishes an unrenderable object
     // from an unrenderable function.
     return `[unrenderable ${typeof value}]`;
+  }
+}
+
+/**
+ * {@link describe}'s arms, split out so the whole inspection — every one of
+ * which a `Proxy` can trap — sits under a single `try` with a single
+ * {@link oneLine} pass over whatever comes back.
+ */
+function inspect(value: unknown): string {
+  if (value instanceof Error) {
+    // `name` and `message` are non-enumerable, so this is the only way they
+    // reach the message at all. `stack` is deliberately left out — it is
+    // multi-line and would bury the one line the caller is reading.
+    return `${value.name}: ${value.message}`;
+  }
+
+  switch (typeof value) {
+    case 'bigint':
+      // The `n` suffix keeps `10n` distinguishable from the number `10`,
+      // which is the whole reason a caller reached for a BigInt.
+      return `${value}n`;
+    case 'symbol':
+      return value.toString();
+    case 'function':
+      return `[Function: ${value.name || 'anonymous'}]`;
+    default:
+      return Object.prototype.toString.call(value);
   }
 }
 
@@ -139,10 +196,23 @@ export function renderPayload(value: unknown): string {
   // silently replaced real data with `[Circular]`. Caught by
   // `renderPayload_repeatedButAcyclicReference_isNotCalledCircular`.
   //
-  // It tracks the *original* graph rather than the replacer's `raw` argument:
-  // a `toJSON` returning a fresh object each call would otherwise never repeat,
-  // so its cycle would never be caught.
-  const path: object[] = [];
+  // Two arrays, one frame per index, because the two questions have two
+  // different answers whenever a `toJSON` is involved:
+  //
+  // - `nodes` holds the *original* graph, which is what a cycle is asked about.
+  //   A `toJSON` returning a fresh object each call never repeats, so its cycle
+  //   would be invisible if the replacer's `raw` argument were tracked instead.
+  // - `holders` holds what `stringify` will pass as `this` for that node's
+  //   children — the replacer's own return value, which for a `toJSON` node is
+  //   the fresh object, *not* the original. Unwinding by matching `this` against
+  //   the original was the bug: a `toJSON` holder was never on the stack, so the
+  //   `while` popped the entire path away, every ancestor was forgotten, and a
+  //   cycle running back through a `toJSON` recursed until the stack blew. The
+  //   `RangeError` then landed in the `catch` below and the whole payload
+  //   collapsed to `[object Object]`. Caught by
+  //   `renderPayload_cycleThroughAToJson_isCalledCircularRatherThanCollapsing`.
+  const holders: unknown[] = [];
+  const nodes: object[] = [];
 
   try {
     return (
@@ -150,17 +220,23 @@ export function renderPayload(value: unknown): string {
         value,
         function replacer(this: unknown, key: string, raw: unknown): unknown {
           const original = (this as Record<string, unknown>)[key];
+          const rendered = isRenderableAsJson(raw) ? raw : describe(raw);
 
           if (typeof original === 'object' && original !== null) {
             // `stringify` walks depth-first, so unwinding to the current holder
             // leaves exactly this node's ancestors on the stack.
-            while (path.length > 0 && path[path.length - 1] !== this) path.pop();
+            while (holders.length > 0 && holders[holders.length - 1] !== this) {
+              holders.pop();
+              nodes.pop();
+            }
 
-            if (path.includes(original)) return '[Circular]';
-            path.push(original);
+            if (nodes.includes(original)) return '[Circular]';
+
+            holders.push(rendered);
+            nodes.push(original);
           }
 
-          return isRenderableAsJson(raw) ? raw : describe(raw);
+          return rendered;
         },
       ) ?? describe(value)
     );

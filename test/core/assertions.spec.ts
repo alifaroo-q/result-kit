@@ -90,6 +90,30 @@ describe('expectOk / expectErr — payloads that broke the message', () => {
     ['a Symbol', () => Symbol('session')],
     ['a function', () => function handler() {}],
     ['a real Error', () => new Error('kaboom')],
+    [
+      // A membrane revokes on teardown and the `Err` that captured one outlives
+      // it. Reading its prototype throws, and `renderPayload` reads the
+      // prototype *before* its own `try` — so this threw the proxy's TypeError
+      // in place of the diagnostic, one trap over from the `get` trap #67 fixed.
+      'a revoked Proxy',
+      () => {
+        const { proxy, revoke } = Proxy.revocable({}, {});
+        revoke();
+        return proxy;
+      },
+    ],
+    [
+      'a Proxy whose getPrototypeOf throws',
+      () =>
+        new Proxy(
+          {},
+          {
+            getPrototypeOf() {
+              throw new Error('no prototype for you');
+            },
+          },
+        ),
+    ],
   ];
 
   it.each(hostile)('expectOk_errCarrying_%s_throwsItsOwnMessage', (_l, make) => {

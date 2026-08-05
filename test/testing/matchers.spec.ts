@@ -457,6 +457,18 @@ describe('a Result whose payload the delegated message cannot serialize', () => 
     ],
     ['a real Error', () => new Error('kaboom')],
     ['a Symbol', () => Symbol('session')],
+    [
+      // The delegated message reads the payload's *prototype* before any of its
+      // own guards run, so a revoked Proxy replaced the branch message with the
+      // proxy's own TypeError — the same class of crash as the circular one
+      // above, arriving through a trap rather than through the serializer.
+      'a revoked Proxy',
+      () => {
+        const { proxy, revoke } = Proxy.revocable({}, {});
+        revoke();
+        return proxy;
+      },
+    ],
   ];
 
   it.each(hostilePayloads)(
@@ -882,5 +894,18 @@ describe('prettified typed errors reach the matchers unedited', () => {
 
     expect(message).not.toContain('\n');
     expect(message).toContain('expected a Result');
+  });
+
+  it('asResult_nonResultErrorWhoseMessageSpansLines_staysASingleLineSentence', () => {
+    // `expect(caught).toBeOk()` on a caught `Error` is the realistic way a
+    // non-`Result` reaches the guard, and a multi-line `message` — a query, an
+    // aggregated report — is ordinary. `renderPayload` interpolated it raw, so
+    // the "sentence" above broke apart into three lines.
+    const message = messageOf(() =>
+      (expect(new Error('first\nsecond')) as { toBeOk: () => void }).toBeOk(),
+    );
+
+    expect(message).not.toContain('\n');
+    expect(message).toContain('Error: first\\nsecond');
   });
 });
