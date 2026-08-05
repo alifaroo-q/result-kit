@@ -18,6 +18,23 @@ const overTheWire = (value: unknown): unknown =>
   JSON.parse(JSON.stringify(value));
 
 /**
+ * The message a failing assertion threw.
+ *
+ * Needed wherever a test compares two failure messages to each other rather
+ * than to a literal — the regressions where two distinct payloads rendered
+ * identically are only visible that way.
+ */
+const messageOf = (failing: () => void): string => {
+  try {
+    failing();
+  } catch (thrown) {
+    return (thrown as Error).message;
+  }
+
+  throw new Error('expected the assertion to fail, but it passed');
+};
+
+/**
  * The four matchers are two symmetric pairs, so most rules below are stated
  * once as a table rather than four times as prose. Each row names the matcher,
  * the half it asserts, and a subject on each side of that half.
@@ -410,6 +427,130 @@ describe('a non-Result the guard cannot JSON-serialize', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Broken state — a *Result* whose payload is hostile to render
+// ---------------------------------------------------------------------------
+
+describe('a Result whose payload the delegated message cannot serialize', () => {
+  // The block above covers the *guard* path — a non-Result subject. This is the
+  // other one, and it was the gap: the guard had a hardened renderer while the
+  // delegated wrong-branch message still went through a bare `JSON.stringify`.
+  // Same class of bug, one path fixed and one not, and every test here was red
+  // before `renderPayload` landed.
+  const hostilePayloads: [label: string, make: () => unknown][] = [
+    [
+      'a circular object',
+      () => {
+        const node: Record<string, unknown> = { type: 'not_found' };
+        node.self = node;
+        return node;
+      },
+    ],
+    ['a BigInt', () => 10n],
+    ['an object carrying a BigInt id', () => ({ type: 'conflict', id: 10n })],
+    [
+      'an object with a throwing toJSON',
+      () => ({
+        toJSON() {
+          throw new Error('nope');
+        },
+      }),
+    ],
+    ['a real Error', () => new Error('kaboom')],
+    ['a Symbol', () => Symbol('session')],
+  ];
+
+  it.each(hostilePayloads)(
+    'toBeOk_errCarrying_%s_reportsTheWrongBranchNotASerializerCrash',
+    (_label, make) => {
+      // The regression in one line: this used to throw
+      // `TypeError: Converting circular structure to JSON`, answering a
+      // question the caller never asked.
+      expect(() => expect(err(make())).toBeOk()).toThrow(/^Expected Ok, got Err/);
+    },
+  );
+
+  it.each(hostilePayloads)(
+    'toBeErr_okCarrying_%s_reportsTheWrongBranchNotASerializerCrash',
+    (_label, make) => {
+      expect(() => expect(ok(make())).toBeErr()).toThrow(/^Expected Err, got Ok/);
+    },
+  );
+
+  it.each(hostilePayloads)(
+    'toBeOkWith_errCarrying_%s_reportsTheWrongBranchNotASerializerCrash',
+    (_label, make) => {
+      expect(() => expect(err(make())).toBeOkWith(1)).toThrow(
+        /^Expected Ok, got Err/,
+      );
+    },
+  );
+
+  it.each(hostilePayloads)(
+    'toBeOk_negatedOnAnOkCarrying_%s_reportsTheOppositeMessage',
+    (_label, make) => {
+      // The `.not` direction reaches the same delegation through the other arm
+      // of `branch`, so it needs its own pass.
+      expect(() => expect(ok(make())).not.toBeOk()).toThrow(
+        /^Expected Err, got Ok/,
+      );
+    },
+  );
+
+  it('toBeOk_errCarryingACircularObject_stillNamesTheErrorType', () => {
+    // Not just "does not crash": the useful part of the payload must survive.
+    // Bailing to `[object Object]` would satisfy every test above.
+    const node: Record<string, unknown> = { type: 'not_found', id: 'u1' };
+    node.self = node;
+
+    const call = () => expect(err(node)).toBeOk();
+
+    expect(call).toThrow(/not_found/);
+    expect(call).toThrow(/u1/);
+    expect(call).toThrow(/\[Circular\]/);
+  });
+
+  it('toBeOk_errCarryingARealError_reportsItsMessageRatherThanEmptyBraces', () => {
+    // `JSON.stringify(new Error('kaboom'))` is `'{}'`, so the most common Err
+    // payload of all — what any try/catch wrapper produces — used to render as
+    // nothing at all while still technically "passing" a non-empty check.
+    expect(() => expect(err(new Error('kaboom'))).toBeOk()).toThrow(
+      'Expected Ok, got Err: Error: kaboom',
+    );
+  });
+
+  it('toBeOk_errCarryingASymbol_isDistinguishableFromErrUndefined', () => {
+    // Both used to render as the literal text `undefined`: `JSON.stringify`
+    // returns undefined, not a string, for a symbol. Two distinct causes, one
+    // identical message.
+    const ofSymbol = messageOf(() => expect(err(Symbol('session'))).toBeOk());
+    const ofUndefined = messageOf(() => expect(err(undefined)).toBeOk());
+
+    expect(ofSymbol).not.toBe(ofUndefined);
+    expect(ofSymbol).toContain('Symbol(session)');
+  });
+
+  it('toBeOk_errCarryingABigInt_isDistinguishableFromTheSameNumber', () => {
+    const ofBigInt = messageOf(() => expect(err(10n)).toBeOk());
+    const ofNumber = messageOf(() => expect(err(10)).toBeOk());
+
+    expect(ofBigInt).not.toBe(ofNumber);
+    expect(ofBigInt).toContain('10n');
+  });
+
+  it('everyHostilePayload_producesAMessageNamingTheBranch', () => {
+    // The class guard, in the shape the empty-message bug taught: `toThrow()`
+    // with no argument is satisfied by a message that says nothing useful, and
+    // `/\S/` is satisfied by `TypeError: Converting circular structure`. Only
+    // asserting on the *branch wording* rules out both.
+    for (const [, make] of hostilePayloads) {
+      expect(messageOf(() => expect(err(make())).toBeOk())).toMatch(
+        /^Expected Ok, got Err: \S/,
+      );
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Failure messages
 // ---------------------------------------------------------------------------
 
@@ -542,6 +683,112 @@ describe('surprising-but-reachable usage', () => {
     expect(() => expect(ok(big)).toBeOkWith([...big, 1])).toThrow(
       /Expected Ok to equal/,
     );
+  });
+});
+
+describe('the payload matchers under .not, on the wrong branch', () => {
+  // Measured, then pinned. The branch matchers *throw* on a subject they cannot
+  // understand, so it is worth stating why these merely fail instead: an Err
+  // genuinely is not "an Ok whose value is 1", so `pass: false` is the honest
+  // answer and negating it is a real pass — unlike the non-Result case, where
+  // `pass: false` would report green about a subject nobody understood.
+  it('toBeOkWith_negatedOnAnErr_passes', () => {
+    expect(err('boom')).not.toBeOkWith(1);
+  });
+
+  it('toBeErrWith_negatedOnAnOk_passes', () => {
+    expect(ok(1)).not.toBeErrWith('boom');
+  });
+
+  it('toBeOkWith_negatedOnAnErr_passesWhateverTheExpectedValue', () => {
+    // It is the *branch*, not the payload, that decides this — so no expected
+    // value can make it fail.
+    expect(err('boom')).not.toBeOkWith('boom');
+  });
+});
+
+describe('vitest integration surfaces', () => {
+  it('toBeOkWith_honoursACustomEqualityTester', () => {
+    // `this.customTesters` is spread into `this.equals`; dropping it would make
+    // the matchers quietly ignore testers every other matcher respects.
+    class Money {
+      constructor(readonly cents: number) {}
+    }
+
+    expect.addEqualityTesters([
+      function moneyTester(a: unknown, b: unknown): boolean | undefined {
+        if (a instanceof Money && b instanceof Money) return a.cents === b.cents;
+        return undefined;
+      },
+    ]);
+
+    expect(ok(new Money(100))).toBeOkWith(new Money(100));
+    // The positive control: a tester that returned `true` for everything would
+    // pass the line above just as happily.
+    expect(() => expect(ok(new Money(100))).toBeOkWith(new Money(101))).toThrow(
+      /Expected Ok to equal/,
+    );
+  });
+
+  it('toBeOk_throughExpectSoft_doesNotThrowOnAPassingAssertion', () => {
+    expect.soft(ok(1)).toBeOk();
+  });
+
+  it('toBeOk_throughExpectPoll_resolves', async () => {
+    await expect.poll(() => ok(1) as unknown, { timeout: 300 }).toBeOk();
+  });
+
+  it('toBeOk_throughTheRejectsChain_passes', async () => {
+    // A rejected promise carrying a Result is odd but reachable, and the
+    // matcher sees the rejection reason like any other subject.
+    await expect(Promise.reject(ok(1))).rejects.toBeOk();
+  });
+
+  it('resultMatchers_survivesBeingRegisteredTwice', () => {
+    // Two setup files, or a setup file plus a stray in-test `expect.extend`.
+    expect.extend(resultMatchers);
+
+    expect(ok(1)).toBeOk();
+    expect(() => expect(ok(1)).toBeErr()).toThrow('Expected Err, got Ok: 1');
+  });
+});
+
+describe('the structural check — subjects that are Results by any honest reading', () => {
+  it('toBeOk_okDefinedAsAGetter_passes', () => {
+    // §2 is structural, and a getter satisfies it. Nothing here may demand an
+    // own data property.
+    expect({
+      get ok() {
+        return true;
+      },
+      value: 1,
+    }).toBeOk();
+  });
+
+  it('toBeOk_okInheritedFromThePrototype_passes', () => {
+    // Same reasoning as the callable case above: tsc assigns this to `Result`,
+    // so a guard that rejected it would be narrower than the type it gates.
+    expect(Object.create({ ok: true, value: 5 }) as unknown).toBeOk();
+  });
+
+  it('toBeOk_frozenResult_passes', () => {
+    // A frozen Result is the common shape once `Object.freeze` is in play, and
+    // nothing in the matchers writes to the subject.
+    expect(Object.freeze(ok(1))).toBeOk();
+  });
+
+  it('toBeOk_subjectWhoseOkGetterThrows_propagatesRatherThanReportingGreen', () => {
+    // Pinned as a known limit, not as a feature: a subject that explodes on
+    // read cannot be classified, and the throw surfaces it. What matters is
+    // that it does not silently pass.
+    const hostile = new Proxy({} as Record<string, unknown>, {
+      get(_target, key) {
+        if (key === 'ok') throw new Error('getter exploded');
+        return undefined;
+      },
+    });
+
+    expect(() => expect(hostile).toBeOk()).toThrow('getter exploded');
   });
 });
 
