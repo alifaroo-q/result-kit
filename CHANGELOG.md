@@ -1,5 +1,149 @@
 # @zireal/result-kit
 
+## 5.4.0
+
+### Minor Changes
+
+- 887fa1d: Add `matchType` to the root barrel — exhaustive, expression-form dispatch over a `TypedError` union.
+
+  `switch (error.type)` narrows, but it is a statement and it is not exhaustive-checked without a `never` helper in the default branch. `matchType` makes exhaustiveness the type: one arm per variant, each receiving its own narrowed variant, returning the union of the arms' return types.
+
+  ```ts
+  import { matchType } from "@zireal/result-kit";
+
+  const status = matchType(error, {
+    not_found: () => 404,
+    forbidden: () => 403,
+    conflict: (e) => (e.details!.slug ? 409 : 400),
+  });
+  //    ^? number — a missing arm, or an arm keyed on a tag the union
+  //       does not have, is a compile error
+  ```
+
+  A catch-all is an optional **third argument** rather than a `_` key in the handler bag, and it is typed to the variants you did **not** handle:
+
+  ```ts
+  matchType(error, { not_found: () => 404 }, (e) => {
+    //                                        ^? forbidden | conflict
+    logUnexpected(e);
+    return 500;
+  });
+  ```
+
+  That residual narrowing is the reason for the third-parameter shape: a `_` arm sharing the object cannot be narrowed to the leftovers under any formulation, so it would hand back the variants you just handled.
+
+  It operates on the error, not on the `Result` — compose it under `match`'s `err` branch:
+
+  ```ts
+  match(result, {
+    ok: () => 200,
+    err: (e) =>
+      matchType(e, {
+        /* … */
+      }),
+  });
+  ```
+
+  Two `TypedError` facts it makes prominent: `details` stays optional after the tag narrows (arms read `e.details!.id`), and only a _closed_ tag union can be exhausted — a bare `TypedError` has an open `string` tag, so any set of arms satisfies it. Reaching a tag with no arm and no fallback throws rather than returning `undefined` under a type promising a value; that is only reachable by defeating the types.
+
+  Purely additive — no existing signature changes, and a consumer who does not import it ships none of it.
+
+- a3f1fa5: Add the optional `@zireal/result-kit/testing` entrypoint: four Vitest matchers — `toBeOk`, `toBeOkWith`, `toBeErr`, `toBeErrWith` — registered with `expect.extend(resultMatchers)`.
+
+  ```ts
+  // vitest.setup.ts
+  import { expect } from "vitest";
+  import { resultMatchers } from "@zireal/result-kit/testing";
+
+  expect.extend(resultMatchers);
+  ```
+
+  ```ts
+  expect(await loadPlan(id)).toBeOkWith({ kind: "noop" });
+  expect(await loadPlan(bad)).toBeErrWith(missingBaseItem());
+  expect(await loadPlan(bad)).toBeErrWith(
+    expect.objectContaining({ type: "missing_base_item" })
+  );
+  ```
+
+  Both `*With` matchers are deep equality; partial matching is Vitest's own `expect.objectContaining`, which they honour. Failure messages are delegated to the existing `expectOk` / `expectErr`, so a wrong-branch failure reports the branch you actually got rather than diffing against the wrong half. The matchers **assert** — they do not narrow, because a Vitest matcher cannot; keep using `expectOk` / `expectErr` to read `.value` afterwards.
+
+  `vitest` is now declared as an **optional** peer dependency. Optional peers are never installed, and the shipped `dist/testing/` chunk imports no bare specifier at all, so the core artifact's zero-install-footprint promise is unchanged — a consumer who installs `@zireal/result-kit` for `ok` / `err` / `Result` still pulls in nothing. That is asserted against the built bundle, not just the manifest. (ADR 0014 §0–§1, closing ADR 0011's deferred Option A.)
+
+  Round one is Vitest-only. On Jest or any other runner, the framework-agnostic `expectOk` / `expectErr` remain the supported path.
+
+  The `/testing` guard that rejects a non-`Result` subject no longer crashes on values `JSON.stringify` refuses — a circular object, a `BigInt`, a `Symbol`, or an object with a throwing `toJSON` now produce the intended `expected a Result` message instead of a `TypeError` from inside the matcher.
+
+### Patch Changes
+
+- e2011e6: `expectOk` / `expectErr` now render a `TypedError` as prose instead of JSON
+
+  A wrong-branch assertion failure whose payload is a `TypedError` — or an array
+  of them, as `combineWithAllErrors` produces — now reads as its §3.4
+  `✖ type: message` line with `details` and `cause` beneath it:
+
+  ```
+  Expected Ok, got Err:
+    ✖ not_found: No user u1
+      details: {"id":"u1"}
+  ```
+
+  Previously that was one line of `JSON.stringify` output. Every other payload
+  renders exactly as before, byte for byte. The `/testing` matchers delegate
+  their wrong-branch messages to these two functions, so `toBeOk` / `toBeOkWith`
+  / `toBeErr` / `toBeErrWith` inherit the richer output with no change to how
+  they are used.
+
+  Also fixes three latent defects in the shared diagnostic renderer, all of which
+  turned a wrong-branch assertion failure into an unrelated crash or a payload
+  rendered as nothing:
+
+  - A value whose property reads throw — a `Proxy` with a hostile `get` trap —
+    could escape the renderer's own `catch` via `Object.prototype.toString`.
+  - A value whose **prototype** cannot be read — a `Proxy` with a throwing
+    `getPrototypeOf` trap, or a revoked `Proxy` — escaped one step earlier still,
+    before the renderer's `catch` was entered at all. A membrane that revokes on
+    teardown leaves exactly this behind, and the assertion asking why threw the
+    proxy's `TypeError` instead of the diagnostic.
+
+    Both now render as `[unrenderable object]` (or `[unrenderable function]`).
+
+  - A reference cycle running back through a `toJSON` was not detected, because
+    `JSON.stringify` makes the `toJSON` result the holder for that node's
+    children. The walk recursed until the stack overflowed and the whole payload
+    collapsed to `[object Object]`. Such a cycle is now marked `[Circular]` with
+    the surrounding structure intact, and a repeated-but-acyclic reference is
+    still rendered in full rather than being mistaken for a cycle.
+
+  The renderer's single-line guarantee is now honoured for the values that go
+  through its non-JSON path. An `Error` whose `message` spans lines previously
+  interpolated those line breaks raw, which broke the `/testing` guard's
+  one-sentence message and could forge an extra line inside the `✖` block above.
+  Line breaks in an `Error` message, a symbol description, a function name or a
+  `Symbol.toStringTag` now render escaped (`\n`, `\r`), with backslashes doubled
+  so that a real line break stays distinguishable from the literal text `\n` —
+  the same escaping `JSON.stringify` already applies to a plain string payload.
+
+- 60f2c41: Fix `expectOk` / `expectErr` — and every `/testing` matcher that delegates to them — throwing the wrong error when the payload resists `JSON.stringify`.
+
+  The failure message is thrown at the moment a caller is already confused about a `Result`, and three payload shapes replaced it with something worse:
+
+  - **A circular object or a `BigInt` crashed the assertion.** `JSON.stringify` throws on both — a domain model with back-references, an id from a database driver — so `expectOk(err(model))` surfaced `TypeError: Converting circular structure to JSON` instead of naming the branch. The `/testing` matchers inherited it: `expect(result).toBeOk()` reported a serializer crash rather than the `Err` it was handed.
+  - **A real `Error` rendered as `{}`.** `name`, `message` and `stack` are non-enumerable, so the most common `Err` payload of all — whatever a try/catch wrapper produces — reported nothing at all.
+  - **A symbol and a function both rendered as the literal text `undefined`**, indistinguishable from `err(undefined)`.
+
+  Payloads render through one non-throwing renderer now. A JSON-safe payload is byte-identical to before, so no message a caller could already read has changed; only the broken ones move:
+
+  ```ts
+  expectOk(err(new Error("kaboom")));
+  // before: Expected Ok, got Err: {}
+  // after:  Expected Ok, got Err: Error: kaboom
+
+  expectOk(err(circularModel));
+  // before: TypeError: Converting circular structure to JSON
+  // after:  Expected Ok, got Err: {"type":"not_found","self":"[Circular]"}
+  ```
+
 ## 5.3.0
 
 ### Minor Changes
