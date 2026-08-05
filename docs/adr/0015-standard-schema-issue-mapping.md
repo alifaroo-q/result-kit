@@ -72,6 +72,12 @@ Normalization, in order:
 
 **Absent and `[]` collapse to `[]`.** The spec permits both and libraries disagree about which means "root". No consumer can act on the difference, and two ways to spell one thing is a bug generator.
 
+> **Amended at implementation ([#61](https://github.com/alifaroo-q/result-kit/issues/61)) — the four cases above are not exhaustive, and the rule is now stated as totality.** The list was written from the spec's `PropertyKey` and treated `symbol` as *the* exotic key. It is not. **Valibot's path items include a Map key — typed `unknown`, so literally any value — and a Set key, which is `null`.** A `v.map(v.bigint(), …)` failure put a `BigInt` in `details` and made `JSON.stringify` on the whole `Result` **throw**; an object key was retained **by identity**, carrying the caller's own graph — cycles and PII included — into the field §2.1 promises is safe, and doing so with `includeCause` *off*, which is precisely the retention cost §5 rejected always-on `cause` to avoid. So the same failure this ADR used to justify dropping vendor extras arrived through `path` instead.
+>
+> The conclusion below stands; its scope was too narrow. The rule is now: **`string` passes through, a *finite* `number` passes through, everything else becomes `String(key)`.** Three narrower cases fold in for the same reason rather than being special-cased — `NaN` and `±Infinity` serialize to `null` and `-0` serializes to `0`, so each would make `JSON.parse(JSON.stringify(err))` differ from `err`. A non-array `path` (a vendor spelling it `'user.email'` — the very form rejected as an *output* two paragraphs down) collapses to `[]` rather than being iterated into one segment per character.
+>
+> Found by an adversarial review pass, not by the tests written alongside the implementation, which exercised only `v.object` / `v.array` and so never reached a Map or Set key.
+
 ### 4. `details` is `{ issues }` and nothing else
 
 `vendor` (`schema['~standard'].vendor`) is a string, JSON-safe, and genuinely useful in a log line — and it is still not in `details`. **Adding an optional field to `details` later is backward-compatible; removing one is not.** On a one-way door, ship the reversible direction. It is also already reachable from `cause` and from the schema the caller is holding.
@@ -112,7 +118,7 @@ The spec permits a `FailureResult` with `issues: []`, and a misbehaving vendor c
 
 - **#61 is unblocked.** The adapter is now a small function against a settled payload contract.
 - **Two new public types** — `ValidationIssue` and `ValidationFailed`. Naming a public type is itself one-way; inlining the structural shape was rejected because a shape nobody can reference gets copied, and copies drift.
-- **§2.1 gains no carve-out.** The `symbol` coercion is what buys this. The guarantee's three documented exceptions stay three.
+- **§2.1 gains no carve-out.** The **total** key coercion is what buys this — see §3's amendment; the `symbol`-only rule this bullet originally credited did not, and shipped a `BigInt` and a live object reference into `details` until an adversarial pass found them. The guarantee's three documented exceptions stay three.
 - **`code`-based branching is unavailable from `details`.** The mitigation is `includeCause` for debugging and `path` for keying. If real demand appears for a portable failure-kind discriminant, it arrives as an **additive optional field** on `ValidationIssue` (§4's reversible direction), not as a reshape.
 - **Zod's tree formatters remain non-portable**, exactly as ADR 0010 §1 found — but the raw material for a tree now exists in `details.issues[].path`. A path-keyed formatter over `ValidationIssue[]` is a *possible* additive helper; nothing here commits to one, and it belongs to §3.4's family rather than to `fromSchema`.
 - **Deferred to #61 as build decisions, not payload decisions:** whether this lives in the core barrel or a `/schema` subpath (and therefore CLAUDE.md's three-files rule), and the value-or-promise async convention under §10.9's `SettledOr` — Standard Schema's `validate` may return a promise.

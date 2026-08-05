@@ -225,10 +225,39 @@ On the fluent side, `.isOk()` / `.isErr()` return **plain booleans** and buy you
 | `fromThrowable(fn, onThrow)` | Wrap a throwing function into a `Result`-returning one |
 | `fromPromise(promise, onReject)` | Catch a **rejection** into the error channel |
 | `fromThrowableAsync(fn, onReject)` | The lazy, reusable form of `fromPromise` |
+| `fromSchema(schema, options?)` | Any [Standard Schema](https://standardschema.dev) validator becomes a `Result`-returning function |
+| `fromSchemaAsync(schema, options?)` | The same, for a schema that validates asynchronously |
 
 **Do-notation** — `safeTry`, `safeUnwrap`. See [below](#do-notation).
 
-**Types** — `Result` `Ok` `Err` `TypedError` `ErrorCtor` `ErrorsOf` `OkTypeOf` `ErrTypeOf`
+**Types** — `Result` `Ok` `Err` `TypedError` `ErrorCtor` `ErrorsOf` `OkTypeOf` `ErrTypeOf` `ValidationIssue` `ValidationFailed` `FromSchemaOptions`
+
+#### Validation — `fromSchema`
+
+Zod 4, Valibot, ArkType and Effect Schema all implement [Standard Schema v1](https://standardschema.dev), a **types-only** spec. So one adapter covers all of them, and the zero-dependency stance is untouched — there is no dependency to add.
+
+```ts
+import { fromSchema, isErr } from '@zireal/result-kit';
+
+const parseUser = fromSchema(UserSchema);   // one wrap, many calls
+
+const result = parseUser(await req.json()); // Result<User, ValidationFailed>
+if (isErr(result)) {
+  for (const { path, message } of result.error.details.issues) {
+    console.log(path.join('.'), message);   // "email", "invalid email"
+  }
+}
+```
+
+The error is a **single** `TypedError<'validation_failed', { issues }>` — one error channel, one error — so it composes with `matchType`, `groupByType` and `combineWithAllErrors` like every other typed error.
+
+Each issue is normalized to the two fields Standard Schema *guarantees*: `message`, and `path` as an array (`[]` means the root). That keeps `details` **identical across vendors and provably JSON-safe**, which is what lets a validation error cross the wire under the [round-trip guarantee](#resultt-e). The price is deliberate and worth knowing: vendor extras — Zod's `code`, `expected`, `input` — are dropped, so you cannot branch on *what kind* of failure occurred from `details`. Pass `{ includeCause: true }` to keep the raw issues on `cause` for debugging; it is off by default because Zod attaches the rejected input, and an always-on `cause` would retain that payload inside a value people log by reflex.
+
+One caveat worth knowing before you log an issue list: `issue.message` is the **vendor's own text, passed through untouched**, and some vendors embed the rejected value in it — Valibot's reads `Invalid email: Received "..."`. The `error.message` this package authors is a count and nothing else, precisely so the one field it controls cannot carry payload; the per-issue messages are not under that promise.
+
+`fromSchema` is synchronous and **throws** if handed an async schema — the spec's own type says any schema *may* be async, so it cannot be caught at compile time. `fromSchemaAsync` accepts both, and is the one to reach for when you do not know statically which you have.
+
+See [ADR 0015](docs/adr/0015-standard-schema-issue-mapping.md) for the full rationale.
 
 ### `/fluent` — `@zireal/result-kit/fluent`
 
