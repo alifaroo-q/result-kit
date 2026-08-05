@@ -1,10 +1,8 @@
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import { readdir } from 'node:fs/promises';
-import { dirname, join, posix, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { beforeAll, describe, expect, it } from 'vitest';
+
+import { ENTRIES, ensureBuilt, sourcesFeeding } from '../support/bundle';
 
 /**
  * **The §7.3 fluent-boundary guard** — "the single most important piece of
@@ -24,16 +22,8 @@ import { beforeAll, describe, expect, it } from 'vitest';
  * a guard that silently reads a stale bundle is worse than no guard, because it
  * reports green.
  *
- * **The behavioural assertions below import from `src/`, and that is a real
- * limitation** (§10.9). An earlier version of this note said the guard as a
- * whole reads `dist/`, which was half true and overstated the coverage: the
- * behavioural half proves the *source* boundary holds, not the *shipped* one, so
- * it is blind to a packaging regression — precisely the class of bug `CLAUDE.md`
- * records for the missed `tsconfig.json` `paths` entry. The structural mechanism
- * is what covers the build; the two are complementary rather than redundant, and
- * neither subsumes the other. Running the behavioural assertions against `dist/`
- * as well would close the gap, and is left as tracked work rather than done
- * silently here.
+ * **The behavioural assertions below run against both `src/` and `dist/`**
+ * (§10.12) — see the note above `SURFACES`.
  *
  * ### Two independent mechanisms, on purpose
  *
@@ -50,94 +40,23 @@ import { beforeAll, describe, expect, it } from 'vitest';
  *    on sourcemaps existing at all.
  *
  * Either alone has a blind spot the other covers. Both must hold.
+ *
+ * **The machinery now lives in [`test/support/bundle.ts`](../support/bundle.ts)**,
+ * extracted when [#63](https://github.com/alifaroo-q/result-kit/issues/63) added
+ * a third entrypoint with its own §7.3 obligations
+ * ([`test/testing/boundary.spec.ts`](../testing/boundary.spec.ts)). The helpers
+ * moved verbatim and the assertions here are unchanged; both leaks were
+ * re-simulated after the move and this file went red for each.
  */
 
-const ROOT = resolve(__dirname, '../..');
-const DIST = join(ROOT, 'dist');
-const ROOT_ENTRY = join(DIST, 'index.js');
-const FLUENT_ENTRY = join(DIST, 'fluent/index.js');
-
-/** The wrapper classes §7.3 names. `ResultAsync` arrives in #29 — guarded now. */
+/** The wrapper classes §7.3 names. */
 const WRAPPERS = ['ResultChain', 'ResultAsync'] as const;
 
-async function newestMtime(dir: string): Promise<number> {
-  const entries = await readdir(dir, { withFileTypes: true });
-  const times = await Promise.all(
-    entries.map(async (entry) => {
-      const full = join(dir, entry.name);
-      return entry.isDirectory()
-        ? newestMtime(full)
-        : statSync(full).mtimeMs;
-    }),
-  );
-  return Math.max(0, ...times);
-}
-
-/** Static import specifiers — enough, because the build emits no dynamic ones. */
-function importsOf(code: string): string[] {
-  return [...code.matchAll(/(?:from|import)\s*["']([^"']+)["']/g)]
-    .map((m) => m[1])
-    .filter((s) => s.startsWith('.'));
-}
-
-/**
- * Every chunk the entry pulls in, transitively — the actual unit a consumer
- * downloads. Checking only the entry file would miss a wrapper parked in a
- * shared chunk, which is a live possibility: rolldown already splits the core
- * into one (`transforms-*.js`) precisely because both entrypoints use it.
- */
-function chunkClosure(entry: string): string[] {
-  const seen = new Set<string>();
-  const queue = [entry];
-
-  while (queue.length > 0) {
-    const chunk = queue.pop() as string;
-    if (seen.has(chunk) || !existsSync(chunk)) continue;
-    seen.add(chunk);
-
-    for (const spec of importsOf(readFileSync(chunk, 'utf8'))) {
-      queue.push(resolve(dirname(chunk), spec));
-    }
-  }
-
-  return [...seen];
-}
-
-/** The `src/` files that fed a chunk, via its sourcemap. */
-function sourcesOf(chunk: string): string[] {
-  const mapPath = `${chunk}.map`;
-
-  // A missing map would make the structural check vacuously green — the exact
-  // failure mode this guard exists to prevent. Fail instead.
-  if (!existsSync(mapPath)) {
-    throw new Error(
-      `No sourcemap for ${chunk}. The §7.3 structural guard reads sourcemaps; ` +
-        `without them it would pass vacuously. Re-enable \`sourcemap: true\` in tsdown.config.ts.`,
-    );
-  }
-
-  const { sources } = JSON.parse(readFileSync(mapPath, 'utf8')) as {
-    sources: string[];
-  };
-
-  return sources.map((source) =>
-    posix.normalize(relative(ROOT, resolve(dirname(chunk), source))),
-  );
-}
-
-beforeAll(async () => {
-  const stale =
-    !existsSync(ROOT_ENTRY) ||
-    (await newestMtime(join(ROOT, 'src'))) > statSync(ROOT_ENTRY).mtimeMs;
-
-  if (stale) {
-    execFileSync('pnpm', ['build'], { cwd: ROOT, stdio: 'pipe' });
-  }
-}, 120_000);
+beforeAll(ensureBuilt, 120_000);
 
 describe('the §7.3 fluent boundary — structural', () => {
   it('rootBundle_isFedByNoFluentSource', () => {
-    const sources = chunkClosure(ROOT_ENTRY).flatMap(sourcesOf);
+    const sources = sourcesFeeding(ENTRIES.root);
 
     expect(sources).not.toEqual(
       expect.arrayContaining([expect.stringContaining('src/fluent/')]),
@@ -145,7 +64,7 @@ describe('the §7.3 fluent boundary — structural', () => {
   });
 
   it('rootBundle_isFedOnlyByCoreSources', () => {
-    const sources = chunkClosure(ROOT_ENTRY).flatMap(sourcesOf);
+    const sources = sourcesFeeding(ENTRIES.root);
 
     // Stated positively too: an empty/garbled source list would satisfy the
     // negative above while proving nothing.
@@ -158,10 +77,10 @@ describe('the §7.3 fluent boundary — structural', () => {
   /**
    * The positive control, and it is not ceremony: it is what separates "the
    * wrapper is absent" from "this detector cannot see a wrapper anywhere". The
-   * three tests above would pass identically against a broken `sourcesOf`.
+   * two tests above would pass identically against a broken `sourcesOf`.
    */
   it('detector_findsTheWrapperInTheFluentBundleWhereItBelongs', () => {
-    const sources = chunkClosure(FLUENT_ENTRY).flatMap(sourcesOf);
+    const sources = sourcesFeeding(ENTRIES.fluent);
 
     expect(sources).toEqual(
       expect.arrayContaining([expect.stringContaining('src/fluent/')]),
@@ -199,64 +118,64 @@ describe('the §7.3 fluent boundary — structural', () => {
  */
 const SURFACES = [
   { tree: 'src', load: () => import('../../src/index') },
-  { tree: 'dist', load: () => import(pathToFileURL(ROOT_ENTRY).href) },
+  { tree: 'dist', load: () => import(pathToFileURL(ENTRIES.root).href) },
 ] as const;
 
 describe.each(SURFACES)(
   'the §7.3 fluent boundary — behavioural ($tree)',
   ({ load }) => {
-  it('rootBarrel_exportsNoWrapper', async () => {
-    const surface = (await load()) as Record<string, unknown>;
+    it('rootBarrel_exportsNoWrapper', async () => {
+      const surface = (await load()) as Record<string, unknown>;
 
-    for (const wrapper of WRAPPERS) {
-      expect(surface).not.toHaveProperty(wrapper);
-    }
-  });
-
-  it('rootBarrel_exportsNoValueThatIsAWrapperInstance', async () => {
-    const surface = (await load()) as Record<string, unknown>;
-
-    for (const value of Object.values(surface)) {
-      expect(WRAPPERS).not.toContain(
-        (value as { constructor?: { name?: string } })?.constructor?.name,
-      );
-    }
-  });
-
-  /**
-   * §7.3's "extend it to cover `safeTry` / `safeUnwrap`". Both are *root*
-   * exports (§5.9), so the guard is not that they are absent — it is that the
-   * root's return plain data. `/fluent` gets same-named dual constructors
-   * returning wrappers (§6.3, #30); the failure this catches is the root's
-   * being wired to those by accident.
-   */
-  it('rootSafeTry_returnsPlainDataNotAWrapper', async () => {
-    const { ok, safeTry, safeUnwrap } = await load();
-
-    const result = safeTry(function* () {
-      const value = yield* safeUnwrap(ok(1));
-      return ok(value + 1);
+      for (const wrapper of WRAPPERS) {
+        expect(surface).not.toHaveProperty(wrapper);
+      }
     });
 
-    expect(result).toEqual({ ok: true, value: 2 });
-    expect(result.constructor).toBe(Object);
-    expect(WRAPPERS).not.toContain(result.constructor.name);
-  });
+    it('rootBarrel_exportsNoValueThatIsAWrapperInstance', async () => {
+      const surface = (await load()) as Record<string, unknown>;
 
-  it('rootSafeUnwrap_yieldsPlainDataNotAWrapper', async () => {
-    const { err, safeUnwrap } = await load();
+      for (const value of Object.values(surface)) {
+        expect(WRAPPERS).not.toContain(
+          (value as { constructor?: { name?: string } })?.constructor?.name,
+        );
+      }
+    });
 
-    const yielded = safeUnwrap(err('boom')).next().value;
+    /**
+     * §7.3's "extend it to cover `safeTry` / `safeUnwrap`". Both are *root*
+     * exports (§5.9), so the guard is not that they are absent — it is that the
+     * root's return plain data. `/fluent` gets same-named dual constructors
+     * returning wrappers (§6.3, #30); the failure this catches is the root's
+     * being wired to those by accident.
+     */
+    it('rootSafeTry_returnsPlainDataNotAWrapper', async () => {
+      const { ok, safeTry, safeUnwrap } = await load();
 
-    expect(yielded).toEqual({ ok: false, error: 'boom' });
-    expect((yielded as object).constructor).toBe(Object);
-  });
+      const result = safeTry(function* () {
+        const value = yield* safeUnwrap(ok(1));
+        return ok(value + 1);
+      });
 
-  it('rootOkAndErr_returnPlainDataNotWrappers', async () => {
-    const { err, ok } = await load();
+      expect(result).toEqual({ ok: true, value: 2 });
+      expect(result.constructor).toBe(Object);
+      expect(WRAPPERS).not.toContain(result.constructor.name);
+    });
 
-    expect(ok(1).constructor).toBe(Object);
-    expect(err('boom').constructor).toBe(Object);
-  });
+    it('rootSafeUnwrap_yieldsPlainDataNotAWrapper', async () => {
+      const { err, safeUnwrap } = await load();
+
+      const yielded = safeUnwrap(err('boom')).next().value;
+
+      expect(yielded).toEqual({ ok: false, error: 'boom' });
+      expect((yielded as object).constructor).toBe(Object);
+    });
+
+    it('rootOkAndErr_returnPlainDataNotWrappers', async () => {
+      const { err, ok } = await load();
+
+      expect(ok(1).constructor).toBe(Object);
+      expect(err('boom').constructor).toBe(Object);
+    });
   },
 );
