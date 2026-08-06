@@ -3,7 +3,7 @@ import { runInNewContext } from 'node:vm';
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 import { err, ok, safeTry, safeUnwrap } from '../../src/index';
-import type { Ok, Result } from '../../src/index';
+import type { Err, Ok, Result } from '../../src/index';
 
 /**
  * REMINDER: every `expectTypeOf` and `@ts-expect-error` below is enforced by
@@ -594,6 +594,104 @@ describe('safeTry releases the generator on short-circuit (#36 retro)', () => {
     });
 
     expect(out).toEqual(err({ type: 'boom' }));
+  });
+});
+
+/**
+ * A `finally` may itself contain a fallible cleanup step — `yield*
+ * safeUnwrap(close())`. A yield reached *during* close re-suspends the
+ * generator, so a single `.return()` reported not-done and stranded the body
+ * mid-unwind: outer `finally`s never ran, the same leak the #36 retro closed,
+ * one level down. Found by the Effect.gen comparison spike
+ * (spikes/effect-gen-comparison); `release` now drives `.return()` until
+ * `done`.
+ */
+describe('safeTry unwinds a finally that itself yields during close', () => {
+  it('runs the outer finally when an inner finally yields an Err mid-close', () => {
+    const log: string[] = [];
+
+    safeTry(function* (): Generator<Err<string>, Result<number, string>> {
+      try {
+        try {
+          yield* safeUnwrap(err('first'));
+          return ok(1);
+        } finally {
+          log.push('inner');
+          yield* safeUnwrap(err('cleanup-failed'));
+        }
+      } finally {
+        log.push('outer');
+      }
+    });
+
+    expect(log).toEqual(['inner', 'outer']);
+  });
+
+  it('keeps the first Err as the answer — cleanup cannot re-route it', () => {
+    const out = safeTry(function* (): Generator<Err<string>, Result<number, string>> {
+      try {
+        yield* safeUnwrap(err('first'));
+        return ok(1);
+      } finally {
+        yield* safeUnwrap(err('cleanup-failed'));
+      }
+    });
+
+    expect(out).toEqual(err('first'));
+  });
+
+  it('consumes several suspension points on one unwind path', () => {
+    const log: string[] = [];
+
+    safeTry(function* (): Generator<Err<string>, Result<number, string>> {
+      try {
+        try {
+          try {
+            yield* safeUnwrap(err('first'));
+            return ok(1);
+          } finally {
+            log.push('a');
+            yield* safeUnwrap(err('a-failed'));
+          }
+        } finally {
+          log.push('b');
+          yield* safeUnwrap(err('b-failed'));
+        }
+      } finally {
+        log.push('c');
+      }
+    });
+
+    expect(log).toEqual(['a', 'b', 'c']);
+  });
+
+  it('waits for the full async unwind before settling', async () => {
+    // Discriminating probe, as in the #36 block: the outer cleanup awaits, so
+    // only a release that follows the unwind across every re-suspension — and
+    // awaits the final `.return()` — sees it before the caller's promise
+    // settles.
+    const log: string[] = [];
+
+    const out = await safeTry(async function* (): AsyncGenerator<
+      Err<string>,
+      Result<number, string>
+    > {
+      try {
+        try {
+          yield* safeUnwrap(Promise.resolve(err('first')));
+          return ok(1);
+        } finally {
+          yield* safeUnwrap(Promise.resolve(err('cleanup-failed')));
+        }
+      } finally {
+        await Promise.resolve();
+        log.push('outer');
+      }
+    });
+    log.push('settled');
+
+    expect(out).toEqual(err('first'));
+    expect(log).toEqual(['outer', 'settled']);
   });
 });
 
