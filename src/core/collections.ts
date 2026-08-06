@@ -1,5 +1,5 @@
 import { renderPayload } from './render';
-import { isResultLike } from './result-like';
+import { isResultLike, readOk } from './result-like';
 import { err, ok } from './result';
 import type { ErrTypeOf, OkTypeOf, Result } from './result';
 
@@ -65,6 +65,28 @@ export type KeyedError<K extends PropertyKey, E> = {
 };
 
 /**
+ * The key as `Object.keys` will actually deliver it.
+ *
+ * **A numeric key is a string at runtime, and the entry must say so.** An
+ * object literal written `{ 1: findUser(id) }` satisfies
+ * `Record<string, Result<unknown, unknown>>` — a numeric key does satisfy a
+ * string index signature — so `keyof T` is the *number* literal `1`, while
+ * `Object.keys` yields `'1'`. Left alone, the entry typed as
+ * `KeyedError<1, …>` and shipped as `{ key: '1', … }`, and the damage was
+ * exactly the feature: `switch (entry.key) { case 1: … }` compiled, narrowed
+ * `entry.error` to that key's variant, and could never run. Silently.
+ *
+ * This is `parse.ts`'s lesson one type over — the discriminant probe there
+ * reached past `in` to `propertyIsEnumerable` because a guard that disagrees
+ * with what JavaScript actually produced is worse than none.
+ *
+ * It applies to the **error** mapped type only. The success side needs no
+ * equivalent: `{ 1: User }` reads correctly as `value[1]`, because JS property
+ * access coerces the index back to a string on the way in.
+ */
+type RuntimeKey<K extends PropertyKey> = K extends number ? `${K}` : K;
+
+/**
  * The diagnostic both combinators throw for an entry that is not a `Result`.
  *
  * A non-`Result` in the bag is a **programming error**, so this stays a hard
@@ -99,16 +121,49 @@ function isArrayInput(value: object): value is readonly unknown[] {
 }
 
 /**
- * Rejects a non-array **iterable** rather than reading it as a record.
+ * One entry that has passed {@link readEntries}, with its branch **snapshotted**.
  *
- * Neither overload accepts one — a `Set<Result>` is not an array and has no own
- * enumerable keys — but the dispatch above sends everything that is not an
- * `Array` down the record path, where `Object.keys(new Set([…]))` is `[]` and
- * the answer would be a silent `ok({})`. The shipped `for...of` happened to
- * iterate it, so this is only reachable through a cast, but a silent wrong
- * answer is the one outcome this module's guard exists to rule out. §5.4
- * declined iterable support (that is Effect's `All.Return`, rejected in F15);
- * declining it *loudly* is the whole of the change.
+ * The third slot is `result.ok` as it read during validation, and the fold uses
+ * it rather than reading `.ok` a second time. §2's union is brandless, so `ok`
+ * may be a *getter* — and one that answers differently on the second read makes
+ * the two passes disagree: `combine` returned the raw object as its `Err` (no
+ * `error` key on it at all), and `combineWithAllErrors` produced
+ * `{ key, error: undefined }`, which is precisely the `E | undefined` the `-?`
+ * clause exists to keep out of the entry union. Validating a bag and then
+ * re-asking it is not validation; the `Result` itself is still carried by
+ * identity, because `combine` promises to hand back the very object it was
+ * given.
+ */
+type ValidatedEntry = [key: string, result: Result<unknown, unknown>, ok: boolean];
+
+/**
+ * The diagnostic for an input that is neither an array nor a record.
+ *
+ * Two shapes reach it, and both are silent wrong answers rather than crashes,
+ * which is why they are worth a throw. A **non-array iterable** — a
+ * `Set<Result>` — is not an `Array`, so the dispatch sends it down the record
+ * path where `Object.keys(new Set([…]))` is `[]` and the answer is `ok({})`;
+ * the shipped `for...of` happened to iterate it. A **primitive** does the same
+ * thing by a shorter route: `Object.keys(5)` is `[]`. `null` is worse still —
+ * reading `Symbol.iterator` off it throws a bare `TypeError` *from inside the
+ * guard*, the handler-is-the-crash shape this package has closed four times, so
+ * the object check runs first.
+ *
+ * §5.4 declined iterable support (that is Effect's `All.Return`, rejected in
+ * F15); declining it *loudly* is the whole of the change. All of it is
+ * reachable only through a cast — `JSON.parse(body) as Record<string, Result>`
+ * is the live one — but a cast is exactly how a wire payload arrives.
+ */
+function notABag(fn: string, received: string): TypeError {
+  return new TypeError(
+    `${fn}: expected an array or a record of Results, but received ${received}`,
+  );
+}
+
+/**
+ * Whether the value would be iterated rather than keyed.
+ *
+ * Called only after the object check above, so it cannot be the crash itself.
  */
 function isNonArrayIterable(value: object): boolean {
   return (
@@ -157,21 +212,22 @@ function define(target: Record<string, unknown>, key: string, value: unknown): v
 function readEntries(
   fn: string,
   results: Readonly<Record<string, unknown>>,
-): [string, Result<unknown, unknown>][] {
-  if (isNonArrayIterable(results)) {
-    throw new TypeError(
-      `${fn}: expected an array or a record of Results, but received a non-array iterable`,
-    );
+): ValidatedEntry[] {
+  if (typeof results !== 'object' || results === null) {
+    throw notABag(fn, renderPayload(results));
   }
 
-  const entries: [string, Result<unknown, unknown>][] = [];
+  if (isNonArrayIterable(results)) throw notABag(fn, 'a non-array iterable');
+
+  const entries: ValidatedEntry[] = [];
 
   for (const key of Object.keys(results)) {
     const entry = results[key];
+    const ok = readOk(entry);
 
-    if (!isResultLike(entry)) throw notAResult(fn, key, entry);
+    if (ok === undefined) throw notAResult(fn, key, entry);
 
-    entries.push([key, entry]);
+    entries.push([key, entry as Result<unknown, unknown>, ok]);
   }
 
   return entries;
@@ -286,10 +342,10 @@ export function combine(
   const entries = readEntries('combine', results);
   const values: Record<string, unknown> = {};
 
-  for (const [key, result] of entries) {
-    if (!result.ok) return result;
+  for (const [key, result, isOk] of entries) {
+    if (!isOk) return result;
 
-    define(values, key, result.value);
+    define(values, key, (result as { readonly value: unknown }).value);
   }
 
   return ok(values);
@@ -359,7 +415,7 @@ export function combineWithAllErrors<
   results: T,
 ): Result<
   { [K in keyof T]: OkTypeOf<NonNullable<T[K]>> },
-  { [K in keyof T]-?: KeyedError<K, ErrTypeOf<NonNullable<T[K]>>> }[keyof T][]
+  { [K in keyof T]-?: KeyedError<RuntimeKey<K>, ErrTypeOf<NonNullable<T[K]>>> }[keyof T][]
 >;
 
 export function combineWithAllErrors(
@@ -388,11 +444,11 @@ export function combineWithAllErrors(
   const values: Record<string, unknown> = {};
   const errors: KeyedError<string, unknown>[] = [];
 
-  for (const [key, result] of entries) {
-    if (result.ok) {
-      define(values, key, result.value);
+  for (const [key, result, isOk] of entries) {
+    if (isOk) {
+      define(values, key, (result as { readonly value: unknown }).value);
     } else {
-      errors.push({ key, error: result.error });
+      errors.push({ key, error: (result as { readonly error: unknown }).error });
     }
   }
 
