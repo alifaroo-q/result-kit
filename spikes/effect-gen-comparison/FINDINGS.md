@@ -383,3 +383,195 @@ array form is a design call, not a measurement:
 | F15 `const T` leaks `readonly` | Take the overload pair, not Effect's unified signature |
 | F16 property order, symbols, optional keys | §5.4's wording must change; the present-`undefined` crash needs a decision |
 | F17 A/B/C measured | C dominates B; A-vs-C is a symmetry call for the amendment |
+
+---
+
+# Part 4 — resource safety (#91)
+
+**Question.** Where does `safeTry` + `try/finally` actually fall short of
+Effect's `Scope` / `acquireRelease`, if anywhere? F2 already proved our
+failure-path unwind is *stronger* — Effect drops the iterator, we close the
+generator — so that is settled and not re-litigated here. What remains is what
+`Scope` buys **on top of** a `finally` that already runs.
+
+**Method.** Experiments `12-resource-safety.spike.ts` (multi-resource ordering,
+partial acquire, fallible cleanup, the lexical-scope gap — ours vs Effect side
+by side) and `13-using-disposable.spike.ts` (TS `using` / `Symbol.dispose`
+inside generator bodies, sync and async). 26 tests, all green; the suite is 204
+across 13 files. Prior art read at `effect@4.0.0-beta.104`:
+`packages/effect/src/Effect.ts` (`acquireRelease`, `acquireUseRelease`,
+`scoped`, `acquireDisposable`, `addFinalizer`) and
+`packages/effect/src/Scope.ts` (`make`, `addFinalizerExit`, `close`, finalizer
+strategy `sequential` | `parallel`).
+
+## F18 — ordering is parity; the *exit reason* is the only ordering-adjacent gap
+
+Nested `try/finally` around multiple resources releases LIFO on the
+short-circuit path — `['acquire-a','acquire-b','release-b','release-a']` —
+byte-for-byte the order Effect's `Scope` produces for two `acquireRelease`s
+under `Effect.scoped`. **No gap.**
+
+The one asymmetry: Effect's `release` is handed the `Exit`, so a finalizer knows
+whether it is unwinding a success or a failure (`release-b-fail`). A `finally`
+takes no argument, so the same knowledge costs a mutable flag set on the last
+line of the `try` — expressible (pinned), but it is bookkeeping the caller must
+remember, and forgetting it is silent.
+
+## F19 — partial acquire: correct under discipline, and the wrong shape is silent
+
+The correct shape works exactly as wanted: acquire A, `try`, acquire B inside
+it, and when B's `yield*` short-circuits the unwind releases A and never touches
+B. Pinned.
+
+The gap is that it is *discipline*, not structure. The shape a caller reaches
+for to escape the nesting — hoist `let a`, `let b`, one `try`, release both in
+one `finally` — type-checks, reads as "release what we took", and releases a
+resource that was never acquired the moment the release is nullish-tolerant
+(a pool `.release`, a `conn?.end()`). Observed:
+`['acquire-a','acquire-b-FAILED','release-undefined','release-a']`. No type
+error, no runtime error, no test failure unless someone asserts on it.
+
+Effect cannot express the mistake: the finalizer is registered *by* the acquire,
+so it only exists once the acquire succeeded. This is a structural advantage,
+and it is the strongest thing `Scope` has that a `finally` does not — but see
+F21, because the language closes most of it for free.
+
+## F20 — the F1 fix composes, and the discard rule is narrower than F1 stated
+
+`yield* safeUnwrap(close())` inside a `finally` composes to depth 3
+(`['release-c','release-b','release-a']`) and across the async path (the
+caller's promise waits for the full unwind — `release` before `settled`). The
+F1 drive-until-done fix holds. **No further defect.**
+
+One correction to how F1's discard rule reads. F1 says errors yielded during
+close are discarded; that is true *on the failure path only*. On the **success**
+path a failing cleanup is not discarded — it becomes the block's answer, and the
+`ok` the body was returning is dropped:
+
+```ts
+safeTry(function* () {
+  try { return ok(1); } finally { yield* safeUnwrap(err('close-failed')); }
+});                                        // => err('close-failed'), not ok(1)
+```
+
+Mechanism, and why `safeTry` needs no special case: `return ok(1)` enters the
+`finally`, which yields — so the *first* `.next()` already comes back
+`{ done: false, value: Err }`, the ordinary short-circuit path. The rule is
+"first `Err` wins"; on the success path the cleanup's `Err` simply is the first.
+
+So cleanup failures are **reported on success and swallowed on failure**
+(`[err('close-failed'), err('boom')]` for the two branches of one body). This
+is defensible — the original error is the more useful of the two — but it is
+neither "always lost" nor "always reported", and it is the one rule a recipe has
+to teach. This was predicted wrong before it was measured; the experiment failed
+red first, which is why it is stated here rather than assumed.
+
+Effect differs: a failing finalizer surfaces in the `Cause` and turns a
+successful exit into a failure. We have no channel for that (F4 — two channels
+by design), so this is a deliberate difference, not a defect.
+
+## F21 — `using` works inside `safeTry` bodies, and it closes F19 for free
+
+The positive result of this spike. TS `using` / `Symbol.dispose` survives
+`safeTry`'s `.return()`-driven close, because V8 lowers `using` to exactly the
+`try/finally` the close already drives:
+
+- **sync body**: disposes on the short-circuit path *and* the success path;
+- **`await using` in an `async function*`**: disposes on short-circuit, and the
+  caller's promise waits for it (`release-a` before `settled`) — the half most
+  likely to have dropped disposal, and it does not;
+- **LIFO with zero nesting**: three `using` lines release `c,b,a` — the shape
+  F18 needed three levels of indentation to write;
+- **partial acquire is structurally safe**: `using b = yield* safeUnwrap(...)`
+  cannot bind a value that was never produced, so F19's footgun *cannot be
+  written*. Observed `['acquire-a','acquire-b-FAILED','release-a']`.
+
+Effect converges on the same feature rather than diverging from it —
+`Effect.acquireDisposable` consumes `Symbol.dispose` / `Symbol.asyncDispose` and
+ties them to a `Scope`.
+
+**Toolchain caveat, load-bearing for any recipe.** `using` needs TS 5.2+ and a
+declaration of `Symbol.dispose`. `lib: ES2023` does **not** declare it — the
+spike and the root tsconfig both type-check only because `@types/node`
+backfills the disposable symbols. A consumer on `lib: ES2023` without
+`@types/node` must add `esnext.disposable` to `lib`, or the recipe does not
+compile for them. Any recipe must say this.
+
+## F22 — where `using` stops: fallible release, and the obligation is still unenforced
+
+Three limits, all pinned:
+
+1. **A fallible release cannot be expressed.** `Symbol.dispose` returns `void`
+   and is a plain method, not part of the generator body — so it cannot
+   `yield*`, and the F20 pattern is unavailable. Its only exits are throw or
+   swallow. This is **strictly worse** than the hand-written `finally`, and F20
+   is exactly why: a `yield*`-ed cleanup `Err` is discarded only when the body
+   already failed, whereas `dispose` has no path to reporting at all. `using`
+   trades away the one case where cleanup failure is reportable.
+2. **A throwing `dispose` replaces the short-circuit `Err`** — sync throws,
+   async rejects. Identical to F4's `finally { throw }` finding, so `using`
+   introduces no new rule. That is the answer we want.
+3. **It does not close F23.** `using` moves release to the point of
+   acquisition, but the binding is still lexical to the block that *writes*
+   `using`. Nothing forces a caller to write `using` rather than `const`, and
+   writing `const` leaks silently. TypeScript has no "must be `using`"
+   annotation; a lint rule is the ceiling.
+
+## F23 — the one gap that is structural: a resource outliving its lexical block
+
+`try/finally` is lexical, so an acquiring helper **cannot** register its own
+release. A caller who forgets compiles, passes review, and leaks
+(`['acquire-conn']`, no release, nothing complained). Effect encodes the
+obligation in the *type*: a scoped resource puts `Scope` in the requirements
+channel, so forgetting `Effect.scoped` is a compile error rather than a leak.
+
+We cannot import that: the requirements channel is the third type parameter this
+package deliberately does not have (F4/F6 — an effect system's price tag). The
+closest expressible equivalent is **inversion of control** — a callback-scoped
+`withX(use)` helper that owns the lexical block:
+
+```ts
+const withConnection = <T, E>(use: (h: Handle) => Result<T, E>) =>
+  safeTry(function* () {
+    const conn = yield* safeUnwrap(acquire());
+    try { return ok(yield* safeUnwrap(use(conn))); }
+    finally { release(conn); }
+  });
+```
+
+Pinned and working. Its cost is visible in the shape: the body becomes a
+callback rather than a step in the caller's do-block, so the caller re-enters
+`safeTry` and the flatness `safeTry` exists to provide is lost at that seam.
+
+## Verdict offered to the decision (#92)
+
+**There is no defect and no soundness gap.** Ordering is parity (F18), the F1
+fix composes (F20), and `using` covers partial-acquire safety and LIFO with zero
+API surface (F21). The recipe-vs-helper call therefore rests on two residues,
+and neither is what the ticket assumed going in:
+
+- **Fallible release reporting** (F20 + F22.1) is the one thing a *helper* could
+  do that neither `finally` nor `using` does: accumulate or surface a cleanup
+  `Err` on the failure path, where today it is swallowed. This is a real,
+  narrow, expressible gap.
+- **The unenforced obligation** (F22.3 + F23) is the one a helper **cannot**
+  close. Nothing forces a caller to reach for `withConnection` any more than it
+  forces them to write `using`. Only a requirements channel does that, and that
+  is out of scope.
+
+So the honest framing: a helper export buys cleanup-error reporting and a name
+for the inversion-of-control shape; it does not buy leak-proofness, and it costs
+a root export, entries in both llms briefs, and a `minor` changeset. A recipe
+buys the same shapes at zero surface cost, but it must teach three rules that
+are each silent when broken — the hoisted-handle footgun (F19), the
+success-vs-failure asymmetry in cleanup reporting (F20), and the
+`esnext.disposable` / `@types/node` requirement (F21).
+
+| Learning | Action |
+| --- | --- |
+| F18 ordering parity | No gap; the `Exit`-argument asymmetry is bookkeeping, not soundness |
+| F19 partial acquire is discipline, not structure | The wrong shape is silent — a recipe must name it |
+| F20 F1 fix composes; discard rule is failure-path-only | F1's wording needs the correction; the asymmetry must be taught |
+| F21 `using` works, and closes F19 for free | Strong recipe material; carries a `lib` caveat |
+| F22 fallible release, throwing dispose, unenforced `using` | The residual gap a helper could close is *reporting*, not leaking |
+| F23 lexical scope vs `Scope` in the type | Structural, unimportable; IoC `withX(use)` is the expressible floor |
