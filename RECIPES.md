@@ -7,6 +7,7 @@ Task-oriented patterns for using `@zireal/result-kit` in a real codebase. For th
 - [Mapping a `Result` to an HTTP response](#mapping-a-result-to-an-http-response)
 - [Sending a `Result` across a server/client boundary](#sending-a-result-across-a-serverclient-boundary)
 - [Testing code that returns `Result`](#testing-code-that-returns-result)
+- [Acquiring and releasing resources inside `safeTry`](#acquiring-and-releasing-resources-inside-safetry)
 
 ---
 
@@ -327,3 +328,112 @@ Three things worth knowing before you reach for them:
 - **`toBeOkWith` / `toBeErrWith` are deep equality**, symmetric on both halves. Partial matching is Vitest's own `expect.objectContaining`, which they honour — there is no third matcher to learn.
 
 On Jest, or on any other runner, `expectOk` / `expectErr` above are the supported path; the matchers are Vitest-only for now.
+
+---
+
+## Acquiring and releasing resources inside `safeTry`
+
+A `safeTry` body that short-circuits **does** run its `finally` blocks. `safeTry` closes the suspended generator rather than abandoning it, so cleanup happens on the error path — the path cleanup exists for — as well as on the success path. On an `async function*` the caller's promise waits for the full unwind before it settles.
+
+That guarantee is the floor. Everything below is about which shape to write on top of it.
+
+### Reach for `using` first
+
+TypeScript's `using` declaration (TS 5.2+) binds release to acquisition at the point of acquisition, and it works inside `safeTry` bodies because the language lowers it to exactly the `try/finally` the close already drives.
+
+```ts
+import { ok, safeTry, safeUnwrap } from '@zireal/result-kit';
+
+const openFile = (path: string): Result<Handle & Disposable, IoError> => …;
+
+const readBoth = () =>
+  safeTry(function* () {
+    using a = yield* safeUnwrap(openFile('a.txt'));
+    using b = yield* safeUnwrap(openFile('b.txt'));
+
+    const merged = yield* safeUnwrap(merge(a, b));
+    return ok(merged);
+  });
+```
+
+Three properties come free, and each is one you would otherwise have to get right by hand:
+
+- **LIFO release with zero nesting.** Three `using` lines release in reverse order. The hand-written equivalent needs three levels of `try` indentation.
+- **Partial acquire is structurally safe.** If `openFile('b.txt')` fails, its `yield*` short-circuits *before* `b` is bound — so `b` is never released, and `a` still is. You cannot write the mistake.
+- **The async path holds.** `await using` inside an `async function*` disposes during the close, and the caller's promise does not settle until it has.
+
+For an asynchronous release, declare `Symbol.asyncDispose` and write `await using` in an `async function*` body.
+
+**Prerequisite, or this does not compile for you.** `using` needs a declaration of `Symbol.dispose`. `lib: ES2023` does **not** provide one. If you have `@types/node` it backfills the disposable symbols and you are already fine; otherwise add `esnext.disposable` to your `lib` array.
+
+### The mistake `using` makes unwritable
+
+This is the shape people reach for to escape nesting, and it is worth seeing once so you recognise it in review:
+
+```ts
+safeTry(function* () {
+  let a: Handle | undefined;
+  let b: Handle | undefined;
+  try {
+    a = yield* safeUnwrap(acquireA());
+    b = yield* safeUnwrap(acquireB()); // fails here
+    return ok(use(a, b));
+  } finally {
+    b?.release(); // ← releases a resource that was never acquired
+    a?.release();
+  }
+});
+```
+
+It type-checks, it reads as "release what we took", and the moment the release is nullish-tolerant — a pool's `.release`, a `conn?.end()` — it calls release on a handle that does not exist. No type error, no runtime error, no failing test unless someone happens to assert on the call log. `using` removes the hoisted binding that makes it possible.
+
+### When release itself can fail
+
+`Symbol.dispose` returns `void` and is a plain method, not part of the generator body — so it cannot `yield*`, and its only exits are to throw or to swallow. When a release can fail *and you want to see it*, write the `finally` by hand:
+
+```ts
+safeTry(function* () {
+  const conn = yield* safeUnwrap(acquire());
+  try {
+    return ok(yield* safeUnwrap(query(conn)));
+  } finally {
+    yield* safeUnwrap(conn.close()); // a fallible release, reported
+  }
+});
+```
+
+**Know which path reports it.** A cleanup `Err` is:
+
+- **reported on the success path** — `return ok(v)` enters the `finally`, whose `yield` is the first short-circuit `safeTry` sees, so the cleanup error becomes the block's answer and the `ok` is dropped;
+- **swallowed on the failure path** — the body's own `Err` got there first.
+
+This is one rule, not two: **first `Err` wins**, applied consistently. On the failure path the original error is the more useful of the two, and it is the one you keep. But it does mean a `close()` that fails during an unwind leaves no trace in the `Result` — log it inside the `finally` if you need to know.
+
+A throwing `dispose` (or a `finally` that throws) is different again: a throw is not a `Result` channel and propagates, replacing the short-circuit `Err` entirely. That is the same rule as anywhere else in the package — throws propagate loudly.
+
+### When the resource must outlive the block
+
+`try/finally` and `using` are both lexical, so an acquiring *helper* cannot register its own release — the caller has to write the block. A caller who forgets leaks silently, and there is no annotation that forces them not to.
+
+The expressible answer is inversion of control: a helper that owns the block and takes your work as a callback.
+
+```ts
+const withConnection = <T, E>(
+  use: (conn: Connection) => Result<T, E>,
+): Result<T, E | AcquireError> =>
+  safeTry(function* () {
+    const conn = yield* safeUnwrap(acquire());
+    try {
+      return ok(yield* safeUnwrap(use(conn)));
+    } finally {
+      release(conn);
+    }
+  });
+```
+
+Two costs, both real:
+
+- **It flattens nothing.** The body becomes a callback rather than a step in your do-block, so a caller re-enters `safeTry` at that seam — losing exactly the flatness `safeTry` exists to provide.
+- **It enforces nothing.** Nothing makes a caller reach for `withConnection` over acquiring by hand, any more than anything makes them write `using` over `const`. Encoding that obligation in the type needs a requirements channel, which this package deliberately does not have.
+
+Use it when the acquire/release pair genuinely belongs to one owner and you want the pairing named. Prefer `using` when the resource's life is the block you are already writing.

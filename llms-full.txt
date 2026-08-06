@@ -1013,6 +1013,55 @@ if (!combined.ok) {
 }
 ```
 
+### Acquiring and releasing resources
+
+A `safeTry` body that short-circuits **does** run its `finally` blocks — `safeTry`
+closes the suspended generator rather than abandoning it, and on an
+`async function*` the caller's promise waits for the full unwind.
+
+**Reach for `using` first.** It works inside `safeTry` bodies, because the
+language lowers it to the same `try/finally` the close already drives:
+
+```ts
+safeTry(function* () {
+  using a = yield* safeUnwrap(openFile('a.txt'));
+  using b = yield* safeUnwrap(openFile('b.txt'));
+  return ok(yield* safeUnwrap(merge(a, b)));
+});
+```
+
+LIFO release with zero nesting; `await using` works in an `async function*`; and
+partial acquire is structurally safe — if `b`'s `yield*` short-circuits, `b` was
+never bound, so only `a` is released. Requires a declaration of `Symbol.dispose`:
+`lib: ES2023` does **not** provide one, so you need `@types/node` (which backfills
+it) or `esnext.disposable` in `lib`.
+
+The mistake `using` makes unwritable is the hoisted handle — `let a, b` with one
+`try` and `b?.release(); a?.release()` in the `finally`. It releases a resource
+that was never acquired, with no type error and no runtime error.
+
+**When release itself can fail**, write the `finally` by hand — `Symbol.dispose`
+returns `void` and cannot `yield*`:
+
+```ts
+try { return ok(yield* safeUnwrap(query(conn))); }
+finally { yield* safeUnwrap(conn.close()); }
+```
+
+Know which path reports it. A cleanup `Err` is **reported on the success path**
+(`return ok(v)` enters the `finally`, whose yield is the first short-circuit
+`safeTry` sees, so it becomes the answer and the `ok` is dropped) and **swallowed
+on the failure path** (the body's own `Err` got there first). One rule — first
+`Err` wins — not two; on the failure path the original error is the one worth
+keeping. Log inside the `finally` if a failed close must leave a trace.
+
+**When the resource must outlive the block**, `try/finally` and `using` are both
+lexical, so an acquiring helper cannot register its own release. The expressible
+answer is inversion of control — `withConnection(use)`, a helper that owns the
+block and takes your work as a callback. It costs flatness (the caller re-enters
+`safeTry` at that seam) and it enforces nothing: encoding the obligation in the
+type needs a requirements channel this package deliberately does not have.
+
 ### There is no `pipe`
 
 v1's `pipe` / `pipeAsync` were removed and have no direct replacement. It is a

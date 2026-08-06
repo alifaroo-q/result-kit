@@ -189,9 +189,17 @@ export function safeTry(
   // level down. (Found by the Effect.gen comparison spike; Effect never resumes
   // a failed body at all, so it cannot hit this.) Each `.return()` consumes at
   // least one suspension point on the unwind path, so the loop terminates for
-  // any real generator body. Errs yielded during close are discarded: the first
-  // short-circuit is the answer, and cleanup cannot re-route it — the same rule
-  // that ignores a `finally`'s `return ok(...)` override.
+  // any real generator body. An Err yielded during close is discarded **on the
+  // failure path only**: the body's own short-circuit got there first, and
+  // cleanup cannot re-route it — the same rule that ignores a `finally`'s
+  // `return ok(...)` override. On the *success* path the same cleanup Err is
+  // not discarded but becomes the answer, because `return ok(v)` enters the
+  // `finally` and its yield is the first `.next()` — the ordinary
+  // short-circuit path, no special case. So "first Err wins" is one rule with
+  // two visible outcomes: cleanup failures are reported on success and
+  // swallowed on failure. (Measured by the Effect.gen comparison spike, F20,
+  // which predicted the unconditional reading and failed red.) Taught in
+  // RECIPES.md, "Acquiring and releasing resources inside `safeTry`".
   // The result of the final `.return()` matters because an `async function*`
   // closes asynchronously — its `finally` runs in a microtask, so the caller's
   // promise must not settle until every step of the unwind has finished.
