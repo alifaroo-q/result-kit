@@ -168,15 +168,33 @@ export function safeTry(
   // to completion and already unwound itself, while a *yielded* Err means it is
   // parked and owes us its `finally` blocks. Closing a completed generator is a
   // no-op, but branching says which case is load-bearing.
-  // Returns whatever `.return()` gave back, because an `async function*` closes
-  // asynchronously — its `finally` runs in a microtask, so the caller's promise
-  // must not settle until that has finished. Dropping this value would resolve
-  // `safeTry` before the body released anything, which is the same leak one turn
-  // later.
+  // `.return()` is driven **until `done`**, not called once. A `finally` may
+  // itself contain a fallible cleanup step — `yield* safeUnwrap(close())` — and
+  // a yield reached *during* close re-suspends the generator: one `.return()`
+  // then reported not-done, the outer `finally`s never ran, and the body was
+  // stranded mid-unwind — the exact leak this closing exists to prevent, one
+  // level down. (Found by the Effect.gen comparison spike; Effect never resumes
+  // a failed body at all, so it cannot hit this.) Each `.return()` consumes at
+  // least one suspension point on the unwind path, so the loop terminates for
+  // any real generator body. Errs yielded during close are discarded: the first
+  // short-circuit is the answer, and cleanup cannot re-route it — the same rule
+  // that ignores a `finally`'s `return ok(...)` override.
+  // The result of the final `.return()` matters because an `async function*`
+  // closes asynchronously — its `finally` runs in a microtask, so the caller's
+  // promise must not settle until every step of the unwind has finished.
+  // Dropping it would resolve `safeTry` before the body released anything,
+  // which is the same leak one turn later.
   const release = (
     settled: IteratorResult<unknown, unknown>,
-  ): unknown | undefined =>
-    settled.done ? undefined : generator.return(undefined as never);
+  ): unknown | undefined => {
+    let step = settled;
+    while (!step.done) {
+      const closed = generator.return(undefined as never);
+      if (isThenable(closed)) return Promise.resolve(closed).then(release);
+      step = closed as IteratorResult<unknown, unknown>;
+    }
+    return undefined;
+  };
 
   // Thenable-detected for the same §10.6 reason as `safeUnwrap` above, and it is
   // the same live bug, not a precaution: `body` is the *caller's* generator, so
