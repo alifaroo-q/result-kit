@@ -1,0 +1,6 @@
+allowBuilds:
+  msgpackr-extract: false
+minimumReleaseAgeExclude:
+  - effect@4.0.0-beta.104
+ignoredBuiltDependencies:
+  - msgpackr-extract
