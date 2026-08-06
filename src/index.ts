@@ -23,6 +23,12 @@ export {
   fromThrowableAsync,
 } from './core/interop';
 export {
+  isResult,
+  parseResult,
+  type MalformedResult,
+  type MalformedResultReason,
+} from './core/parse';
+export {
   err,
   isErr,
   isOk,
