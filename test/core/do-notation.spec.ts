@@ -740,3 +740,176 @@ describe('safeTry accumulates the return channel too (#36 retro)', () => {
     expect(out).toEqual(err(notFound));
   });
 });
+
+/**
+ * RECIPES.md, "Acquiring and releasing resources inside `safeTry`", pinned
+ * (#85, item 3).
+ *
+ * These behaviours were *measured* by the Effect.gen comparison spike (F19-F23,
+ * `spikes/effect-gen-comparison/experiments/12` and `13`) and then taught in
+ * RECIPES.md — but the spike's files are `*.spike.ts`, which root vitest never
+ * collects, so nothing in the green bar held the recipe to its word. That is the
+ * same gap #85 flags in Effect's own suite (their `describe("gen")` is thin; the
+ * interesting behaviour lives in driver code), turned on ourselves: `it.effect`
+ * is not transferable, but its underlying complaint is.
+ *
+ * The failure this prevents is silent. Change `release`, and the recipe goes on
+ * teaching a guarantee the runner no longer makes while every command stays
+ * green — exactly what `test/docs/agent-kit.spec.ts` exists to stop for the
+ * llms briefs.
+ *
+ * `using` needs a `Symbol.dispose` declaration, which `lib: ES2023` does not
+ * provide; `@types/node` backfills it here. That prerequisite is itself part of
+ * the recipe, and if it ever stops holding, `pnpm check` says so.
+ */
+describe('the resource-safety recipe holds (RECIPES.md, spike F19-F23)', () => {
+  interface Handle extends Disposable {
+    readonly name: string;
+  }
+
+  const openHandle = (name: string, log: string[]): Result<Handle, string> => {
+    log.push(`acquire-${name}`);
+
+    return ok({
+      name,
+      [Symbol.dispose]() {
+        log.push(`release-${name}`);
+      },
+    });
+  };
+
+  const failToOpen = (name: string, log: string[]): Result<Handle, string> => {
+    log.push(`acquire-${name}-FAILED`);
+
+    return err(`cannot-open-${name}`);
+  };
+
+  it('disposes a using binding when the body short-circuits', () => {
+    const log: string[] = [];
+
+    safeTry(function* () {
+      using _a = yield* safeUnwrap(openHandle('a', log));
+      yield* safeUnwrap(err('boom'));
+
+      return ok(1);
+    });
+
+    expect(log).toEqual(['acquire-a', 'release-a']);
+  });
+
+  it('disposes three using bindings in LIFO order with no nesting', () => {
+    const log: string[] = [];
+
+    safeTry(function* () {
+      using _a = yield* safeUnwrap(openHandle('a', log));
+      using _b = yield* safeUnwrap(openHandle('b', log));
+      using _c = yield* safeUnwrap(openHandle('c', log));
+      yield* safeUnwrap(err('boom'));
+
+      return ok(1);
+    });
+
+    expect(log.slice(3)).toEqual(['release-c', 'release-b', 'release-a']);
+  });
+
+  it('never releases a resource whose acquire failed (partial acquire)', () => {
+    // The claim is *structural*: a short-circuiting `yield*` never binds `b`,
+    // so the hoisted-handle mistake RECIPES shows cannot be written with
+    // `using`. Pinned as the absence of a `release-b` entry.
+    const log: string[] = [];
+
+    safeTry(function* () {
+      using _a = yield* safeUnwrap(openHandle('a', log));
+      using _b = yield* safeUnwrap(failToOpen('b', log));
+
+      return ok(1);
+    });
+
+    expect(log).toEqual(['acquire-a', 'acquire-b-FAILED', 'release-a']);
+  });
+
+  it('awaits an await-using disposal before the caller promise settles', () => {
+    // The half most likely to have dropped disposal. A synchronous probe would
+    // pass either way, so the disposer itself awaits.
+    const log: string[] = [];
+
+    const openAsync = (name: string): Result<AsyncDisposable, string> =>
+      ok({
+        async [Symbol.asyncDispose]() {
+          await Promise.resolve();
+          log.push(`release-${name}`);
+        },
+      });
+
+    return safeTry(async function* () {
+      await using _a = yield* safeUnwrap(Promise.resolve(openAsync('a')));
+      yield* safeUnwrap(Promise.resolve(err('boom')));
+
+      return ok(1);
+    }).then(() => {
+      log.push('settled');
+
+      expect(log).toEqual(['release-a', 'settled']);
+    });
+  });
+
+  it('reports a fallible cleanup Err on the success path', () => {
+    // RECIPES: "reported on the success path" — `return ok(v)` enters the
+    // `finally`, whose yield is the first short-circuit `safeTry` sees, so the
+    // cleanup error becomes the answer and the `ok` is dropped. Predicted
+    // wrong before it was measured (spike F20), and pinned only there until now.
+    const out = safeTry(function* (): Generator<Err<string>, Result<number, string>> {
+      try {
+        return ok(1);
+      } finally {
+        yield* safeUnwrap(err('close-failed'));
+      }
+    });
+
+    expect(out).toEqual(err('close-failed'));
+  });
+
+  it('propagates a throwing dispose instead of returning the short-circuit Err', () => {
+    // RECIPES: a throw is not a `Result` channel, so it replaces the Err
+    // entirely — the same rule as everywhere else in the package.
+    const throwingHandle = (): Result<Disposable, string> =>
+      ok({
+        [Symbol.dispose]() {
+          throw new Error('dispose-threw');
+        },
+      });
+
+    expect(() =>
+      safeTry(function* () {
+        using _a = yield* safeUnwrap(throwingHandle());
+        yield* safeUnwrap(err('boom'));
+
+        return ok(1);
+      }),
+    ).toThrow('dispose-threw');
+  });
+
+  it('releases through the callback-scoped helper the recipe recommends', () => {
+    // The inversion-of-control shape RECIPES offers for a resource that must
+    // outlive the block. It buys the *pairing*, not leak-proofness — but the
+    // pairing is what is pinned here.
+    const log: string[] = [];
+
+    const withConnection = <T, E>(
+      use: (conn: string) => Result<T, E>,
+    ): Result<T, E | string> =>
+      safeTry(function* () {
+        log.push('acquire-conn');
+        try {
+          return ok(yield* safeUnwrap(use('conn')));
+        } finally {
+          log.push('release-conn');
+        }
+      });
+
+    const out = withConnection(() => err('query-failed'));
+
+    expect(log).toEqual(['acquire-conn', 'release-conn']);
+    expect(out).toEqual(err('query-failed'));
+  });
+});
