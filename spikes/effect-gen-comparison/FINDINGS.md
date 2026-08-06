@@ -575,3 +575,150 @@ success-vs-failure asymmetry in cleanup reporting (F20), and the
 | F21 `using` works, and closes F19 for free | Strong recipe material; carries a `lib` caveat |
 | F22 fallible release, throwing dispose, unenforced `using` | The residual gap a helper could close is *reporting*, not leaking |
 | F23 lexical scope vs `Scope` in the type | Structural, unimportable; IoC `withX(use)` is the expressible floor |
+
+---
+
+# Part 5 — hardening follow-ups (issue #85)
+
+The four items parked in #85 after the main comparison: the `/fluent` mirror
+that never got spike coverage, `Effect.fn`, Effect's `it.effect` harness, and
+the F6 perf gap. New experiments: `14-fn-ergonomics.spike.ts`,
+`15-unwrap-perf.spike.ts`. New root-suite tests in
+`test/fluent/do-notation.spec.ts` and `test/core/do-notation.spec.ts`.
+
+## F24 — the `/fluent` delegation holds under every hostile edge, and two of the mirrors are load-bearing
+
+Parts 1-4 drove a *core* `safeUnwrap` generator from the *core* runner. At
+`/fluent` both ends differ: the yielded step is the wrapper's own
+`[Symbol.iterator]`, which `yield*`s the core adapter — so the unwind `release`
+drives crosses **two** levels of generator delegation — and the answer leaves
+through `/fluent`'s `safeTry`, which re-wraps it
+(`ResultAsync.from(Promise.resolve(settled).then(toPlain))` on the async side).
+Nothing had asserted that the delegation preserves the core's guarantees.
+
+It does. 17 tests added, covering F1 (yield-in-finally, sync and async), F4
+(throw in the body, throw from a `finally` during close, both halves), F5/F20
+(the override is ignored on the failure path, the cleanup `Err` is the answer on
+the success path), F7 (hand-driving a wrapper iterator past its short-circuit;
+plus the wrapper's **re-iterability** — it holds a settled `Result`, so unlike
+Effect's eager gen it has no re-execution to detect) and F3/§10.11 at the
+*yield* slot (a thenable-carrying `Err` is yielded by identity and its `then` is
+never called).
+
+Two proven red rather than assumed, which is the point of the exercise:
+
+- reverting `release` to a single `.return()` fails exactly
+  `safeTry_innerFinallyYieldsAChainMidClose_stillRunsTheOuterFinally` and
+  `safeTry_asyncFinallyYieldsAResultAsyncMidClose_settlesOnlyAfterTheFullUnwind`
+  — the same 3-of-4 split the core block saw, since the first-`Err`-wins mirror
+  held pre-fix;
+- flipping `isSettledBody` to ask thenable-first fails
+  `safeTry_shortCircuitingOnAThenableCarryingErr_returnsAResultChain` alongside
+  the two existing §10.11 tests. That mirror matters more than it looks: the
+  hostile `then` never settles, so the failure mode is a **hang**, not a wrong
+  type.
+
+## F25 — `Effect.fn`: nothing to steal, and the one real gap is already closed three ways
+
+`Effect.fn` bundles four jobs. Three do not transfer for reasons already
+settled: the named form opens a **tracing span** (needs a tracer, i.e. the
+runtime this package does not have — F4/F6), it captures a **stack frame** at
+the definition site (we have no trace channel; a throw propagates with its own
+stack), and the trailing arguments are **`pipe` transforms** (declined in
+F9-F13).
+
+The fourth is the interesting one, because it is about *generator bodies*
+rather than about effects: a `function*` cannot be an arrow, so a do-block
+written inside a class method loses `this`. `Effect.fn` solves it with a
+`{ self }` option.
+
+The gap is real for us too — pinned: a bare `function*` body reading `this`
+throws a `TypeError` in strict mode. But it is **already closed by the shape of
+the API**, three ways, all pinned in experiment 14: `safeTry(() => this.#body(id))`
+(an arrow *is* a legal thunk even though a generator cannot be an arrow),
+`safeTry(function* (this: Service) {…}.bind(this))`, and the `const self = this`
+any JS author already knows.
+
+Why Effect needs the option and we do not: `Effect.fn(body)` builds a **reusable
+function of the body's arguments**, so the body is handed to the combinator and
+there is no caller-authored enclosing function for `this` to be lexical in.
+`safeTry(body)` runs *now* and returns the answer — the caller always writes the
+enclosing function themselves (the method, the arrow, the exported const), which
+is exactly where `this` already is. **Decline**; an options overload on a shipped
+runner would buy one line over `const self = this`.
+
+## F26 — `it.effect` does not transfer, but its complaint does — and it landed on us
+
+`it.effect` (read at `Effect-TS/effect@main`, `packages/vitest`) wraps the body
+in a run of the effect with the test services provided — `TestClock`,
+`TestConsole` — plus a fresh `Scope` per test, closed at the end; siblings
+`it.layer` / `it.live` / `it.prop` / `it.flakyTest` share the machinery. Every
+one of those exists because an `Effect` is a **description** that needs a
+runtime and an environment before it can be observed. `safeTry` is eager and
+returns plain data: a plain `it` already calls it and reads the answer. There is
+no boilerplate to remove, no clock to fake, no layer to share. **Decline.**
+
+The transferable half is the *observation* #85 recorded alongside it — that the
+interesting behaviour was pinned in driver code rather than in tests. Turned on
+ourselves, it found a live gap: **RECIPES.md's entire "Acquiring and releasing
+resources inside `safeTry`" section — five subsections of consumer-facing
+promises — was measured only in `12-resource-safety.spike.ts` and
+`13-using-disposable.spike.ts`, which are `*.spike.ts` and so are never
+collected by root vitest.** Change `release` and the recipe goes on teaching a
+guarantee the runner no longer makes, with every command green. That is the same
+silent-drift class `test/docs/agent-kit.spec.ts` exists to stop for the llms
+briefs, and the recipe had no equivalent.
+
+Closed: seven tests in `test/core/do-notation.spec.ts` now pin `using` disposal
+on the short-circuit path, LIFO across three bindings, partial-acquire safety,
+`await using` disposal *before* the caller's promise settles, the success-path
+cleanup report (F20), a throwing `dispose` replacing the `Err` (F22.2), and the
+callback-scoped `withConnection` pairing (F23). All seven go red when `release`
+is disabled.
+
+## F27 — the perf gap: bigger than F6 said, 98% attributable, and still not worth fixing
+
+F6's "~8x" was a side-observation of a correctness experiment: one run, no
+repetitions, no attribution. Re-measured best-of-5 in `15-unwrap-perf.spike.ts`,
+with a probe that separates the runner from the adapter (best-of-5 ms; two runs,
+ratios stable, absolute times vary with JIT warmth):
+
+| variant | 100k steps in one body | vs Effect |
+| --- | ---: | ---: |
+| ours, `safeUnwrap` adapter | 121-238ms | **16-19.5x** |
+| ours, no adapter (body reads `.ok` itself) | 2.3-4.3ms | **0.3-0.4x** |
+| ours, hand-rolled iterator candidate | 38-65ms | 5.0-5.3x |
+| Effect `Effect.gen` | 7.6-12.2ms | 1x |
+
+So the gap is **worse** than recorded (16-19.5x, not 8x) and F6's attribution is
+confirmed and quantified: **98% of it is the per-step `safeUnwrap` generator
+allocation**, not the runner and not the generator protocol. Without the
+adapter, the same runner is ~3x *faster* than Effect.
+
+Two more shapes, because one 100k-step body is the least representative
+benchmark a `Result` library could pick:
+
+| shape | ours | effect | ratio |
+| --- | ---: | ---: | ---: |
+| 33k blocks x 3 steps (realistic) | 147-289ms | 75-132ms | 2.0-2.2x |
+| 100k blocks, first step fails (short-circuit) | 333-525ms | 333-434ms | **1.0-1.1x** |
+
+The headline number shrinks to 2x at a realistic step count and to **parity** on
+the short-circuit path — the path a `Result` library exists for.
+
+A fast path does exist and is measured, not hypothesised: a generator is
+single-shot so it cannot be cached, but a hand-rolled iterable object is ~3.2-3.7x
+faster than the generator adapter. **Not adopted.** It would rewrite the hot,
+correctness-critical path that already carries four documented defect classes
+(the §10.6 cross-realm bug, the RESUMED_AFTER_SHORT_CIRCUIT diagnostic, F1's
+drive-until-done unwind, F3's thenable rule) and hand-roll the `return`/`throw`
+protocol methods that `yield*` delegation relies on for the unwind — all to win
+a microbenchmark shape that does not occur, since a real step is I/O. Recorded
+here so the ceiling is known if someone ever arrives with a profile.
+
+| Learning | Action |
+| --- | --- |
+| F24 `/fluent` delegation | **17 tests added**; two mirrors proven red, one of them a hang rather than a wrong type |
+| F25 `Effect.fn` | **Decline** — three jobs need a runtime or `pipe`; the `this` gap is already closed by the thunk shape |
+| F26 `it.effect` | **Decline** the harness; **adopt** the complaint — 7 tests now pin RECIPES.md's resource section, which lived only in spike files |
+| F27 perf | Re-measured (16-19.5x, 98% adapter, parity on short-circuit); candidate fast path measured and **not adopted** |
