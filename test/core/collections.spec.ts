@@ -586,3 +586,507 @@ describe('the not-a-Result diagnostic', () => {
     expect(() => combine(bag)).toThrow(TypeError);
   });
 });
+
+/**
+ * Own-property and prototype semantics of the record path.
+ *
+ * `define` exists because `values[key] = …` disagrees with own-property
+ * semantics for `__proto__`, and `readEntries` reads through `Object.keys` for
+ * the same reason `parse.ts` reads through `propertyIsEnumerable`. Both are
+ * pinned above for `__proto__` alone; the rest of the family that reaches
+ * `Object.prototype` is pinned here, because a fix that special-cased the one
+ * name rather than leaving property semantics alone would still pass those.
+ */
+describe('the record path — key and prototype semantics', () => {
+  it('objectPrototypeKeyNames_areOrdinaryKeysOnBothSides', () => {
+    const bag = {
+      constructor: ok(1),
+      toString: ok(2),
+      hasOwnProperty: ok(3),
+      valueOf: ok(4),
+    };
+
+    const result = combine(bag);
+
+    expect(result).toEqual(ok({ constructor: 1, toString: 2, hasOwnProperty: 3, valueOf: 4 }));
+  });
+
+  it('nullPrototypeBag_isReadTheSameAsAnOrdinaryOne', () => {
+    // `Object.create(null)` is what a "safe map" looks like, and it is exactly
+    // the shape a `hasOwnProperty`-based read would have crashed on.
+    const bag = Object.create(null) as Record<string, Result<number, NotFound>>;
+    bag.a = ok(1);
+    bag.b = err(notFound);
+
+    expect(combine(bag)).toBe(bag.b);
+  });
+
+  it('frozenBag_isCombinedWithoutMutatingIt', () => {
+    const bag = Object.freeze({ a: ok(1), b: err(notFound) }) as Record<
+      string,
+      Result<number, NotFound>
+    >;
+
+    expect(combineWithAllErrors(bag)).toEqual(err([{ key: 'b', error: notFound }]));
+  });
+
+  it('accessorValuedKey_isReadExactlyOnceDespiteTheTwoPassRecordPath', () => {
+    // `readEntries` validates the whole bag and then the combinator folds it —
+    // two passes. It stores the entry rather than the key, so a getter-valued
+    // property must still be pulled once; reading it twice would make the value
+    // combined differ from the value validated.
+    let reads = 0;
+    const bag = {} as Record<string, Result<number, NotFound>>;
+    Object.defineProperty(bag, 'a', {
+      enumerable: true,
+      get: () => {
+        reads += 1;
+        return ok(reads);
+      },
+    });
+
+    combine(bag);
+
+    expect(reads).toBe(1);
+  });
+
+  it('arrayLikeBag_reportsTheLengthKeyRatherThanSilentlyTreatingItAsAnArray', () => {
+    // An `arguments`-shaped object is not an `Array`, so `isArrayInput` sends it
+    // down the record path where `length` is an ordinary own enumerable key.
+    // The named diagnostic is what makes that legible instead of baffling.
+    const arrayLike = { 0: okUser(), 1: okUser(), length: 2 } as unknown as Record<
+      string,
+      Result<unknown, unknown>
+    >;
+
+    expect(() => combine(arrayLike)).toThrow(
+      'combine: value at key "length" is not a Result (received: 2)',
+    );
+  });
+
+  it('accumulationOrder_isPropertyOrderWithIntegerLikeKeysFirst', () => {
+    // `combine`'s fail-fast ordering is pinned above; accumulation inherits the
+    // same rule, and only the accumulating half can show the whole sequence.
+    const result = combineWithAllErrors({
+      b: err('B'),
+      2: err('2'),
+      a: err('A'),
+      10: err('10'),
+    });
+
+    expect(result.ok ? [] : result.error.map((entry) => entry.key)).toEqual([
+      '2',
+      '10',
+      'b',
+      'a',
+    ]);
+  });
+});
+
+/**
+ * Purity — the record form's output must be a fresh, ordinary object, and the
+ * input must come back untouched. `define` writes onto a record the combinator
+ * allocates; a regression that wrote onto the *input* instead would pass every
+ * value assertion above.
+ */
+describe('the record path — purity and idempotency', () => {
+  it('successRecord_isNotAliasedToTheInputBag', () => {
+    const bag = { a: ok(1) };
+
+    const result = combine(bag);
+
+    expect(result.ok && result.value).not.toBe(bag);
+  });
+
+  it('inputBag_isUnchangedAfterCombining', () => {
+    const bag: Record<string, Result<number, NotFound>> = { a: ok(1), b: err(notFound) };
+    const snapshot = { ...bag };
+
+    combineWithAllErrors(bag);
+
+    expect(bag).toEqual(snapshot);
+  });
+
+  it('successRecord_isAPlainObjectWithOrdinaryWritableKeys', () => {
+    // `define` sets `writable`/`enumerable`/`configurable` explicitly, because
+    // `Object.defineProperty`'s defaults are all `false` — a caller would get a
+    // frozen-feeling record that silently ignores assignment in sloppy mode.
+    const result = combine({ a: ok(1) });
+
+    if (!result.ok) throw new Error('unreachable');
+    expect(Object.getPrototypeOf(result.value)).toBe(Object.prototype);
+    expect(Object.getOwnPropertyDescriptor(result.value, 'a')).toEqual({
+      value: 1,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  });
+
+  it('sameBagTwice_producesEqualAnswers', () => {
+    const bag = { a: ok(1), b: err(notFound) };
+
+    expect(combineWithAllErrors(bag)).toEqual(combineWithAllErrors(bag));
+  });
+});
+
+/**
+ * Hostile inputs. The diagnostic must report rather than become the crash —
+ * the shape closed four times already in this package — and a proxy must be
+ * read through its traps rather than around them.
+ */
+describe('the record path — hostile inputs', () => {
+  it('bigIntEntry_isRenderedRatherThanCrashingTheDiagnostic', () => {
+    // A bare interpolation would reach `JSON.stringify`, which throws on a
+    // `BigInt`: a serializer crash in place of the report.
+    const bag = { a: 1n } as unknown as Record<string, Result<unknown, unknown>>;
+
+    expect(() => combine(bag)).toThrow(
+      'combine: value at key "a" is not a Result (received: 1n)',
+    );
+  });
+
+  it('symbolEntry_isRenderedDistinguishablyRatherThanAsUndefined', () => {
+    // `JSON.stringify(Symbol())` is `undefined`, which would render a symbol,
+    // a function and `undefined` identically — `renderPayload`'s second
+    // invariant.
+    const bag = { a: Symbol('nope') } as unknown as Record<string, Result<unknown, unknown>>;
+
+    expect(() => combine(bag)).toThrow(
+      'combine: value at key "a" is not a Result (received: Symbol(nope))',
+    );
+  });
+
+  it('proxyOwnKeysTrap_decidesWhichKeysParticipate', () => {
+    // The read goes through `Object.keys`, so a bag may legitimately be a proxy
+    // — the hidden key must not sneak into the answer.
+    const target = { a: ok(1), hidden: err(notFound) };
+    const bag = new Proxy(target, {
+      ownKeys: () => ['a'],
+      getOwnPropertyDescriptor: (t, key) => Object.getOwnPropertyDescriptor(t, key),
+    }) as Record<string, Result<number, NotFound>>;
+
+    expect(combine(bag)).toEqual(ok({ a: 1 }));
+  });
+
+  it('revokedProxyBag_throwsRatherThanReportingAnEmptySuccess', () => {
+    // The mirror of the revoked-*entry* case above: it must not become `ok({})`.
+    const { proxy, revoke } = Proxy.revocable({ a: ok(1) }, {});
+    revoke();
+
+    expect(() => combine(proxy as Record<string, Result<number, never>>)).toThrow(TypeError);
+    expect(() => combineWithAllErrors(proxy as Record<string, Result<number, never>>)).toThrow(
+      TypeError,
+    );
+  });
+
+  it('nonResultEntryInAnArray_isRenderedThroughTheSameDiagnostic', () => {
+    // The array path's guard and the record path's share `notAResult`, so the
+    // wording cannot drift between them; only `index N` vs `key "N"` differs.
+    const rows = [{ nope: true }] as unknown as Result<number, NotFound>[];
+
+    expect(() => combine(rows)).toThrow(
+      'combine: value at index 0 is not a Result (received: {"nope":true})',
+    );
+  });
+});
+
+/**
+ * Type-level attacks on the overload pair — all enforced by `pnpm check`, never
+ * by `pnpm test`. The baseline above pins that an array cannot reach the record
+ * overload; these pin that the record overload still infers correctly once the
+ * input stops being a fresh object literal, which is where a badly-shaped
+ * generic signature would fall apart silently.
+ */
+describe('the record overload — inference under indirection', () => {
+  it('genericWrapperOverARecord_stillInfersPerKeyTypes', () => {
+    // The failure mode §10.9 warns about: a conditional in *parameter* position
+    // does not reduce for an unresolved type parameter, which would break every
+    // generic wrapper. The record overload uses a plain constraint, so it must
+    // survive one.
+    function combineBag<T extends Record<string, Result<unknown, unknown>>>(bag: T) {
+      return combine(bag);
+    }
+
+    const result = combineBag({ user: okUser(), order: okOrder() });
+
+    expectTypeOf(result).toEqualTypeOf<
+      Result<{ user: User; order: Order }, NotFound | Timeout>
+    >();
+  });
+
+  it('genericWrapperOverAnArray_stillPreservesTheTuple', () => {
+    function combineRows<T extends readonly Result<unknown, unknown>[]>(
+      rows: readonly [...T],
+    ) {
+      return combine(rows);
+    }
+
+    const result = combineRows([okUser(), okOrder()]);
+
+    expectTypeOf(result).toEqualTypeOf<
+      Result<[User, Order], NotFound | Timeout>
+    >();
+  });
+
+  it('asConstTuple_doesNotLeakReadonlyIntoTheSuccessValue', () => {
+    // The cost F15 rejected the unified `const Arg` spelling over. A `readonly`
+    // input must still hand back a mutable tuple, or an already-shipped
+    // call-site changes type for a feature it never asked for.
+    const rows = [okUser(), okOrder()] as const;
+
+    const result = combine(rows);
+
+    expectTypeOf(result).toEqualTypeOf<
+      Result<[User, Order], NotFound | Timeout>
+    >();
+  });
+
+  it('satisfiesAnnotatedBag_keepsTheLiteralKeys', () => {
+    // `satisfies` is the idiomatic way to check a bag against the constraint
+    // without widening it; if it widened, every key would degrade to `string`
+    // and `KeyedError`'s discrimination would silently vanish.
+    const bag = { user: okUser(), order: okOrder() } satisfies Record<
+      string,
+      Result<unknown, unknown>
+    >;
+
+    const result = combineWithAllErrors(bag);
+
+    expectTypeOf(result).toEqualTypeOf<
+      Result<
+        { user: User; order: Order },
+        (KeyedError<'user', NotFound> | KeyedError<'order', Timeout>)[]
+      >
+    >();
+  });
+
+  it('unionValuedKey_unionsBothHalvesAtThatKey', () => {
+    const bag: { a: Result<User, NotFound> | Result<Order, Timeout> } = { a: okUser() };
+
+    const result = combine(bag);
+
+    expectTypeOf(result).toEqualTypeOf<
+      Result<{ a: User | Order }, NotFound | Timeout>
+    >();
+  });
+
+  it('partialMappedType_keepsOptionalityOnSuccessAndStripsItOnTheError', () => {
+    // The `-?` asymmetry again, reached through `Partial<>` rather than an
+    // inline `?` — a mapped-type input is where a signature that happened to
+    // work on literals tends to stop working.
+    const bag: Partial<{ user: Result<User, NotFound> }> = {};
+
+    const result = combineWithAllErrors(bag);
+
+    expectTypeOf(result).toEqualTypeOf<
+      Result<{ user?: User | undefined }, KeyedError<'user', NotFound>[]>
+    >();
+  });
+
+  it('nestedCombine_composesWithoutAnnotation', () => {
+    const result = combine({ inner: combine({ a: okUser() }), outer: okOrder() });
+
+    expectTypeOf(result).toEqualTypeOf<
+      Result<{ inner: { a: User }; outer: Order }, NotFound | Timeout>
+    >();
+  });
+
+  it('indexSignatureBag_mapsToARecordOnTheSuccessSideToo', () => {
+    // The error side's honest degradation is pinned above; the success side
+    // must degrade the same way rather than to `{}`.
+    const bag: Record<string, Result<User, NotFound>> = { a: okUser() };
+
+    const result = combine(bag);
+
+    expectTypeOf(result).toEqualTypeOf<Result<Record<string, User>, NotFound>>();
+  });
+});
+
+describe('KeyedError narrowing beyond switch', () => {
+  it('findWithAKeyComparison_narrowsToThatKeysVariant', () => {
+    // tsc infers a type predicate from `(e) => e.key === 'user'`, so the entry
+    // union discriminates through `.find` and not only through `switch`. That
+    // is the payoff of keeping `key` and `error` correlated per entry rather
+    // than shipping the partial-record shape.
+    const result = combineWithAllErrors({ user: errUser(), order: errOrder() });
+
+    if (result.ok) throw new Error('unreachable');
+
+    const hit = result.error.find((entry) => entry.key === 'user');
+
+    expectTypeOf(hit).toEqualTypeOf<KeyedError<'user', NotFound> | undefined>();
+    expect(hit).toEqual({ key: 'user', error: notFound });
+  });
+
+  it('filterWithAKeyComparison_narrowsTheWholeArray', () => {
+    const result = combineWithAllErrors({ user: errUser(), order: errOrder() });
+
+    if (result.ok) throw new Error('unreachable');
+
+    const onlyUser = result.error.filter((entry) => entry.key === 'user');
+
+    expectTypeOf(onlyUser).toEqualTypeOf<KeyedError<'user', NotFound>[]>();
+    expect(onlyUser).toEqual([{ key: 'user', error: notFound }]);
+  });
+
+  it('ifOnKey_narrowsTheErrorTheSameWayTheSwitchDoes', () => {
+    const result = combineWithAllErrors({ user: errUser(), order: errOrder() });
+
+    if (result.ok) throw new Error('unreachable');
+
+    for (const entry of result.error) {
+      if (entry.key === 'order') {
+        expectTypeOf(entry.error).toEqualTypeOf<Timeout>();
+      } else {
+        expectTypeOf(entry.error).toEqualTypeOf<NotFound>();
+      }
+    }
+  });
+});
+
+/**
+ * ---------------------------------------------------------------------------
+ * RED — the two blocks below prove defects in `src/core/collections.ts` and are
+ * left failing on purpose. See the report accompanying them; neither is a test
+ * that should be relaxed.
+ * ---------------------------------------------------------------------------
+ */
+describe('a numeric record key', () => {
+  it('numericKey_theEntryKeyIsTypedAsTheStringObjectKeysActuallyDelivers', () => {
+    // `{ 1: … }` satisfies `Record<string, Result<…>>` — a numeric key does
+    // satisfy a string index signature — so `keyof T` is the *number* literal
+    // `1`, while `Object.keys` yields `'1'`. Typed as `KeyedError<1, …>` the
+    // damage was exactly the feature this type exists for: `case 1:` compiled,
+    // narrowed `entry.error` to that key's variant, and could never run.
+    // `RuntimeKey` stringifies it, so the discriminant agrees on both sides.
+    const result = combineWithAllErrors({ 1: errUser() });
+
+    expectTypeOf(result).toEqualTypeOf<
+      Result<{ 1: User }, KeyedError<'1', NotFound>[]>
+    >();
+
+    if (result.ok) throw new Error('unreachable');
+
+    expect(result.error).toEqual([{ key: '1', error: notFound }]);
+  });
+
+  it('numericKey_theArmThatCanNeverRunNoLongerCompiles', () => {
+    const result = combineWithAllErrors({ 1: errUser() });
+
+    if (result.ok) throw new Error('unreachable');
+
+    for (const entry of result.error) {
+      switch (entry.key) {
+        case '1':
+          expectTypeOf(entry.error).toEqualTypeOf<NotFound>();
+          break;
+      }
+
+      // @ts-expect-error - the runtime key is the string '1'; a numeric arm is dead code
+      if (entry.key === 1) throw new Error('unreachable');
+    }
+
+    expect(result.error).toHaveLength(1);
+  });
+
+  it('numericKey_readsBackOffTheSuccessRecordUnchanged', () => {
+    // The success mapped type is deliberately NOT stringified: JS property
+    // access coerces the index on the way in, so `value[1]` is correct and
+    // `{ 1: User }` is the more faithful type for a caller who wrote `{ 1: … }`.
+    const result = combine({ 1: okUser(), b: okOrder() });
+
+    expectTypeOf(result).toEqualTypeOf<
+      Result<{ 1: User; b: Order }, NotFound | Timeout>
+    >();
+
+    if (!result.ok) throw new Error('unreachable');
+
+    expect(result.value[1]).toBe(user);
+    expect(Object.keys(result.value)).toEqual(['1', 'b']);
+  });
+});
+
+describe('the validate-then-fold seam', () => {
+  it('okGetterThatFlips_theFoldHonoursTheBranchValidationSaw', () => {
+    // §2's union is brandless, so `ok` may be a getter — and one that answers
+    // differently on the second read made the two passes disagree. Reading
+    // `.ok` again in the fold, `combine` returned this raw object AS its `Err`
+    // (it has no `error` key at all) and `combineWithAllErrors` produced
+    // `{ key, error: undefined }` — the `E | undefined` the `-?` clause exists
+    // to keep out of the entry union, arriving by the back door.
+    let reads = 0;
+    const flipping = {
+      get ok() {
+        reads += 1;
+        return reads === 1;
+      },
+      value: 'V',
+    };
+
+    expect(combine({ a: flipping } as never)).toEqual(ok({ a: 'V' }));
+    expect(reads).toBe(1);
+  });
+
+  it('okGetterThatFlips_accumulationNeverEmitsAnUndefinedError', () => {
+    let reads = 0;
+    const flipping = {
+      get ok() {
+        reads += 1;
+        return reads !== 1;
+      },
+      error: notFound,
+    };
+
+    const result = combineWithAllErrors({ a: flipping } as never);
+
+    expect(result).toEqual(err([{ key: 'a', error: notFound }]));
+  });
+
+  it('okIsReadExactlyOncePerEntry', () => {
+    let reads = 0;
+    const counted = {
+      get ok() {
+        reads += 1;
+        return true;
+      },
+      value: 1,
+    };
+
+    combine({ a: counted } as never);
+
+    expect(reads).toBe(1);
+  });
+});
+
+describe('an input that is neither an array nor a record', () => {
+  it('nonObjectInput_isReportedRatherThanAnsweredWithAnEmptySuccess', () => {
+    // `isArrayInput` is false for a primitive, so it goes down the record path,
+    // where `Object.keys(5)` is `[]` and the answer is a silent `ok({})` — the
+    // one outcome `isNonArrayIterable` was added in this same commit to rule
+    // out, reached by a shorter route. `JSON.parse(body)` yielding a bare
+    // number or `true` behind a `Record<string, Result<…>>` cast is the live
+    // path, the same cast the `Set` case is reachable through.
+    //
+    // Correct behaviour: a non-object input should throw a named diagnostic
+    // from the same family, e.g. "expected an array or a record of Results".
+    const notABag = 5 as unknown as Record<string, Result<unknown, unknown>>;
+
+    expect(() => combine(notABag)).toThrow(/expected an array or a record of Results/);
+  });
+
+  it('nullInput_reportsThroughTheDiagnosticFamilyRatherThanCrashingInTheGuard', () => {
+    // `isNonArrayIterable` reads `value[Symbol.iterator]` off `null` before
+    // anything has checked it is an object, so the guard added to *replace* a
+    // bare `TypeError: Cannot read properties of undefined` throws a bare
+    // `TypeError: object null is not iterable (cannot read property
+    // Symbol(Symbol.iterator))` of its own — the handler-is-the-crash shape
+    // this package has closed four times (`renderPayload` ×3, `schema.ts`,
+    // `parse.ts`).
+    //
+    // Correct behaviour: the same named diagnostic as above.
+    const notABag = null as unknown as Record<string, Result<unknown, unknown>>;
+
+    expect(() => combine(notABag)).toThrow(/expected an array or a record of Results/);
+  });
+});

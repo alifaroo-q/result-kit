@@ -41,9 +41,30 @@ import type { Result } from './result';
  * both callers inherit it, so they cannot disagree about it.
  */
 export function isResultLike(value: unknown): value is Result<unknown, unknown> {
-  return (
-    (typeof value === 'object' || typeof value === 'function') &&
-    value !== null &&
-    typeof (value as { readonly ok?: unknown }).ok === 'boolean'
-  );
+  return readOk(value) !== undefined;
+}
+
+/**
+ * The single read of `ok` behind {@link isResultLike} — the branch itself, or
+ * `undefined` when there is no readable boolean there.
+ *
+ * Exported so a caller that must both *classify* and *branch on* a value can do
+ * it in **one** property access. §2's union is brandless, so `ok` may be a
+ * getter, and a getter is free to answer differently each time it is asked:
+ * §5.4's combinators validate a whole bag and then fold it, and asking twice
+ * let the two passes disagree — the fold took a branch validation had not
+ * approved. Reading once and carrying the answer is the only fix that does not
+ * either duplicate this guard or re-ask a value that has already lied.
+ *
+ * `undefined` is unambiguous as the negative: `ok` is `boolean` by §2, so a
+ * `Result` can never produce it.
+ */
+export function readOk(value: unknown): boolean | undefined {
+  if ((typeof value !== 'object' && typeof value !== 'function') || value === null) {
+    return undefined;
+  }
+
+  const ok = (value as { readonly ok?: unknown }).ok;
+
+  return typeof ok === 'boolean' ? ok : undefined;
 }

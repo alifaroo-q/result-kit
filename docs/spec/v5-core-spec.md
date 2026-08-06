@@ -398,6 +398,9 @@ export type KeyedError<K extends PropertyKey, E> = {
   readonly error: E;
 };
 
+// Internal. `Object.keys` stringifies a numeric key; see the 2026-08-06 (ii) amendment.
+type RuntimeKey<K extends PropertyKey> = K extends number ? `${K}` : K;
+
 export function combine<T extends Record<string, Result<unknown, unknown>>>(
   results: T,
 ): Result<
@@ -411,7 +414,7 @@ export function combineWithAllErrors<
   results: T,
 ): Result<
   { [K in keyof T]: OkTypeOf<NonNullable<T[K]>> },
-  { [K in keyof T]-?: KeyedError<K, ErrTypeOf<NonNullable<T[K]>>> }[keyof T][]
+  { [K in keyof T]-?: KeyedError<RuntimeKey<K>, ErrTypeOf<NonNullable<T[K]>>> }[keyof T][]
 >;
 ```
 
@@ -427,9 +430,18 @@ export function combineWithAllErrors<
 >
 > **Two clauses in the signatures are load-bearing.** `NonNullable<T[K]>` is required rather than defensive — with an optional key `T[K]` is `Result | undefined`, which fails `OkTypeOf`'s and `ErrTypeOf`'s `R extends Result<unknown, unknown>` constraint, so the signature does not compile without it. And `-?` appears on the **error** mapped type but deliberately **not** on the success one: optionality must survive on the success side (`{ posts?: Result<string, E> }` maps to `posts?: string | undefined`, which is correct), while on the error side an optional key without `-?` puts `undefined` into the entry union — §10.6's failure mode, and the defect that sank the partial-record alternative. The asymmetry reads as an inconsistency and must carry a doc comment and a type-level assertion.
 
+> **Amended (2026-08-06, at implementation): the entry key is `RuntimeKey<K>`, not `K`.** The signature above wrote `KeyedError<K, …>`, and for a numeric key that type was false. `{ 1: findUser(id) }` satisfies `Record<string, Result<unknown, unknown>>` — a numeric key does satisfy a string index signature — so `keyof T` is the *number* literal `1`, while `Object.keys` yields `'1'`.
+>
+> The cost was exactly the feature this type exists for: `switch (entry.key) { case 1: … }` compiled, narrowed `entry.error` to that key's variant, and could never run. Silently, which is the same failure mode §10.6 and the `-?` clause are about, and the same lesson `parse.ts` learned reaching past `in` — a type that disagrees with what JavaScript actually produced is worse than a looser one.
+>
+> Corrected in place rather than annotated as a deviation, on the strict-superset test the `partition` amendment above used: no call that resolved before stops resolving, and the only inference that moves is the one that was wrong. It applies to the **error** mapped type alone — the success side keeps `{ 1: User }`, because JS property access coerces `value[1]` back to a string on the way in, so there the number literal is the *more* faithful type.
+>
+> Found by an adversarial test pass, not by review. Pinned by `test/core/collections.spec.ts`; enforced by `pnpm check`.
+
 - **`combine` is fail-fast** (first error, errors unioned); **`combineWithAllErrors` accumulates every error** as a flat array for an array input, and as a **`KeyedError` array** for a record input — the `ZodError.issues[]` analog, and the whole of the accumulation story.
 - **The record form of `combineWithAllErrors` carries keys; the array form stays flat.** The pair is knowingly asymmetric: a record knows the name of each part and throwing that away is the only reason not to pass one. `KeyedError` keeps `key` and `error` correlated per entry, so `switch (entry.key)` narrows `error` to that key's variant; over an index-signature record it degenerates honestly to `KeyedError<string, E>`. The consequence to state at the call-site: a `KeyedError[]` is **not** accepted by `groupByType` or `prettifyErrors`, which take a flat `TypedError[]` — bridge with `errors.map((e) => e.error)`.
 - **"First `Err`" means property order for a record input, not order as written.** `combine({ 10: late, 2: early })` returns `early`: `Object.keys` yields integer-like keys in ascending numeric order *before* insertion-ordered string keys, and `combineWithAllErrors` inherits the same ordering for accumulation. Only own enumerable properties participate, matching `parse.ts`. **Symbol keys are invisible** — a symbol-keyed `Err` does not join the string index signature, so it type-checks and is silently dropped. This is documented rather than closed: it matches the §2.1 serialization boundary the package is built around, and a per-call symbol scan would defend against a shape the type system cannot express usefully.
+- **An input that is neither an array nor a record throws too**, rather than answering `ok({})`. A primitive, `null`, or a non-array iterable (a `Set<Result>`) all reach the record path and have no own enumerable keys, so the answer was a silent empty success — and `null` crashed inside the guard itself. All of it is reachable only through a cast, which is exactly how a wire payload arrives. §5.4 ships no iterable overload; declining one *loudly* is the whole of the rule.
 - **A present-but-`undefined` entry throws a named diagnostic.** An optional key may carry `undefined` as a *present* own key; reading `.ok` off it threw a bare `TypeError` — a handler that is itself the crash. It stays a hard failure (a non-`Result` in the bag is a programming error, and skipping it silently would hide a real mistake) but reports through `render.ts`'s diagnostic family, naming the offending key: `combine: value at key "posts" is not a Result (received: undefined)`. **The array path takes the same guard**, since `for...of` over a sparse array yields `undefined` identically — that half is a fix to shipped behaviour. The two paths differ in *when* they fire: the record path validates the whole bag first, so the diagnostic is deterministic rather than hiding behind whichever `Err` happened to come first; the array path guards as visited, because a sparse array is reachable only through a cast and the hot path should not pay a second pass.
 - **Both preserve tuples** — heterogeneous per-position types, with the homogeneous array as a special case.
 - **Empty input is `ok([])`** for both combinators — the identity that makes `combine` fold-like, and what keeps `combineWithAllErrors` from erring on *no* errors. **`combine({})` is `ok({})`**, the same identity in the record form rather than a special case; an empty *array* still picks the array overload, so the two never contend. `partition([])` is `[[], []]`.
