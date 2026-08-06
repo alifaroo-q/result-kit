@@ -602,6 +602,29 @@ The same test covers `/testing`: no matcher code reaches the root bundle, and th
 
 ---
 
+## Coding agents
+
+If an LLM writes TypeScript in your repo, point it at the adoption kit. Both
+files ship **inside the package**, so an agent can read them from
+`node_modules/` with no network:
+
+| File | What it is |
+|---|---|
+| [`llms.txt`](llms.txt) | A self-contained brief — the API, the `TypedError` convention, the gotchas. Paste it into a context window and the agent can write idiomatic code. |
+| [`llms-full.txt`](llms-full.txt) | The long form: wire story, do-notation, `fromSchema`, recipes, migration, and the rationale behind the surprising decisions. |
+| [`skills/using-result-kit/`](skills/using-result-kit/SKILL.md) | An [Agent Skill](https://code.claude.com/docs/en/skills) that loads on demand when the agent is actually writing `Result` code. |
+
+```bash
+# install the skill into your own repo
+cp -r node_modules/@zireal/result-kit/skills/using-result-kit .claude/skills/
+```
+
+**Why this exists.** Models write `neverthrow` from training priors, and the two
+libraries are close enough to look interchangeable — `result.map(f)` instead of
+`map(result, f)`, `.match(okFn, errFn)` instead of `match(r, { ok, err })`,
+`.isOk()` assumed to narrow when `/fluent`'s does not. The kit leads with an
+explicit wrong→right table for exactly that reason.
+
 ## Documentation
 
 - [`RECIPES.md`](RECIPES.md) — adoption patterns: gradual migration, HTTP mapping, testing, the `safeTry` widening gotcha.
