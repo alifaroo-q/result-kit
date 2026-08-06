@@ -88,11 +88,17 @@ const MESSAGES: Readonly<Record<MalformedResultReason, string>> = {
 };
 
 /**
- * Is `key` a property that would survive `JSON.stringify`?
+ * Is `key` an **own enumerable** property?
  *
- * `propertyIsEnumerable` is exactly that question — it is true for **own
- * enumerable** properties and nothing else, which is precisely the set
- * `JSON.stringify` writes.
+ * That is the set `JSON.stringify` writes *when it serializes an object's
+ * properties at all* — which is the useful question here, and is deliberately
+ * narrower than "would this key survive a round trip". **A `toJSON` replaces
+ * the whole serialization**, so an object carrying one can have an own
+ * enumerable `ok` that `JSON.stringify` never writes, and this probe says
+ * nothing about it. That is not a hole: such a value *is* a usable `Result`
+ * today — `isOk` narrows it, `.value` reads — and `JSON.parse` cannot produce
+ * one, so it never arrives at a wire boundary. The question asked here is *is
+ * this a `Result`*, not *will re-serializing it produce itself*.
  *
  * A plain `'ok' in value` was the first spelling and it was wrong, caught by
  * its own test rather than by review: `in` walks the prototype chain, so an
@@ -131,8 +137,11 @@ function classify(value: unknown): MalformedResultReason | null {
   if (typeof value !== 'object' || value === null) return 'not_an_object';
 
   try {
-    // An array cannot round-trip as a `Result`: `JSON.stringify` writes only
-    // its indices, so any `ok` property it carried is already gone.
+    // A `Result` is an object with named fields; nothing produces an
+    // array-shaped one, and `JSON.stringify` writes only an array's indices, so
+    // a named `ok` on one could not have survived the trip that brought it
+    // here. (That second clause is a reason to reject an array, not a general
+    // serialization oracle — see `isWireProperty` on `toJSON`.)
     if (Array.isArray(value)) return 'not_an_object';
 
     if (!isWireProperty(value, 'ok')) return 'missing_discriminant';
@@ -157,6 +166,16 @@ function classify(value: unknown): MalformedResultReason | null {
     // reading `type` off `undefined`. There is no value-side equivalent —
     // nothing in the package consumes `.value` structurally, so `{ ok: true }`
     // behaves correctly in every function that touches it.
+    //
+    // What this check does **not** claim is to close that crash path. The
+    // pre-wire form — `err(undefined)`, i.e. `{ ok: false, error: undefined }`,
+    // where `error` *is* an own enumerable property — is **accepted** and
+    // crashes those same three. That is the blessed-producer rule again and not
+    // an inconsistency: `err(undefined)` is constructible, so rejecting it
+    // would reject `err`'s own output exactly as rejecting `{ ok: true }` would
+    // reject `ok()`'s. This function judges the **envelope's provenance**, not
+    // whether the payload inside it is a sensible error; a caller who put
+    // `undefined` in the error channel was not lied to by a serializer.
     if (!discriminant && !isWireProperty(value, 'error')) {
       return 'error_dropped';
     }
@@ -185,7 +204,12 @@ function classify(value: unknown): MalformedResultReason | null {
  *
  * Reach for this inside your own code, and for {@link parseResult} at a wire
  * boundary where you want the rejection to say *why*. Both run the same
- * `classify`, so they can never disagree about what a `Result` is.
+ * `classify`, so they can never disagree about **the same observation** — there
+ * is one definition of a `Result` here, not two that could drift. That is a
+ * claim about the implementations, not about idempotency: an input that
+ * *changes as it is read* (a getter returning a different `ok` each time, a
+ * property that deletes itself) is two different values to two calls, and the
+ * two answers may differ. No pure function can promise otherwise.
  *
  * Composes with `fromPredicate` when you want the check in the `Result` world
  * with an error of your own choosing:
@@ -195,6 +219,18 @@ function classify(value: unknown): MalformedResultReason | null {
  * A value already typed as a `Result<User, E>` keeps its narrower type through
  * this guard — `Result<User, E>` is assignable to `Result<unknown, unknown>`,
  * so TypeScript keeps the more specific of the two.
+ *
+ * **The `Ok<void>` carve-out has a type cost, and it is unavoidable.** A
+ * round-tripped `ok()` is `{ ok: true }` with no `value` key, this guard
+ * accepts it (see `classify`), and TypeScript then narrows it to `Ok<unknown>`
+ * — so `value.value` *compiles* against an object that has no such property.
+ * It reads `undefined` at runtime, which is what the README documents and is
+ * usually what the caller wanted from a void success. There is no signature
+ * that both accepts the value and refuses the access: the alternative is
+ * rejecting `ok()`'s own documented output. Do not "fix" this by narrowing to
+ * something like `Ok<unknown> | { ok: true }` — the union infects every
+ * consumer of the guard to describe a property that is absent rather than
+ * merely `undefined`, a distinction no caller can act on.
  */
 export function isResult(value: unknown): value is Result<unknown, unknown> {
   return classify(value) === null;

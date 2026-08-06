@@ -175,7 +175,10 @@ describe('extra properties ride along', () => {
     const stamped = { ok: true as const, value: 1, traceId: 'abc' };
     const parsed = parseResult(stamped);
     if (isErr(parsed)) throw new Error('expected Ok');
-    expect(parsed.value).toStrictEqual(stamped);
+    // Identity, not structural equality: a copy that happened to keep the extra
+    // keys would satisfy `toStrictEqual` and still be a rewrite.
+    expect(parsed.value).toBe(stamped);
+    expect(Object.keys(parsed.value)).toStrictEqual(['ok', 'value', 'traceId']);
   });
 });
 
@@ -258,13 +261,79 @@ describe('rejections, by reason', () => {
     expectRejected(hidden, 'missing_discriminant');
   });
 
-  it('applies the same rule to `error`', () => {
+  it('applies the same rule to an inherited `error`', () => {
     const parent = { error: 'inherited' };
     const child = Object.create(parent) as Record<string, unknown>;
     child.ok = false;
 
     expect(wire(child)).toStrictEqual({ ok: false });
     expectRejected(child, 'error_dropped');
+  });
+
+  it('applies the same rule to a non-enumerable own `error`', () => {
+    // The mirror of the `ok` case above. Without this, the `error` probe could
+    // be weakened from `propertyIsEnumerable` to `hasOwn` and no test would
+    // notice — half the `isWireProperty` contract would be unpinned.
+    const hidden = { ok: false };
+    Object.defineProperty(hidden, 'error', {
+      value: 'hidden',
+      enumerable: false,
+    });
+
+    expect(Object.hasOwn(hidden, 'error')).toBe(true);
+    expect(wire(hidden)).toStrictEqual({ ok: false });
+    expectRejected(hidden, 'error_dropped');
+  });
+});
+
+describe('what the probe deliberately does not answer', () => {
+  it('accepts an object whose `toJSON` replaces the whole envelope', () => {
+    // `propertyIsEnumerable` is the own-enumerable question, not an oracle for
+    // "would a round trip reproduce this". A `toJSON` bypasses property
+    // serialization entirely, so `ok` is own-enumerable yet never written.
+    const disguised = {
+      ok: true as const,
+      value: 1,
+      toJSON: () => 'not a result at all',
+    };
+
+    expect(JSON.stringify(disguised)).toBe('"not a result at all"');
+    // Accepted, because it *is* a usable Result right now…
+    expect(isResult(disguised)).toBe(true);
+    // …and it cannot reach a wire boundary: JSON.parse never produces a toJSON.
+    expect(isResult(wire(disguised))).toBe(false);
+  });
+
+  it('accepts a pre-wire `err(undefined)`, whose `error` key is present', () => {
+    // The counterpart of the rejected `{ ok: false }`, and not an
+    // inconsistency: `err(undefined)` is constructible, so rejecting it would
+    // reject `err`'s own output the way rejecting `{ ok: true }` would reject
+    // `ok()`'s. The envelope is intact; only the payload is odd, and judging
+    // payloads is not this function's job.
+    const preWire = err(undefined);
+
+    expect(Object.hasOwn(preWire, 'error')).toBe(true);
+    expect(isResult(preWire)).toBe(true);
+    // The same value after a round trip has genuinely lost the key.
+    expect(isResult(wire(preWire))).toBe(false);
+  });
+
+  it('is a pure function, not a promise of idempotence over a mutating input', () => {
+    // `isResult` and `parseResult` share one `classify`, so they cannot
+    // disagree about the same observation — but an input that changes as it is
+    // read is a different value on each call, and no pure function can help.
+    let reads = 0;
+    const mutating = {
+      get ok(): boolean {
+        reads += 1;
+        return reads === 1;
+      },
+      value: 1,
+    };
+
+    expect(isResult(mutating)).toBe(true); // reads once: ok === true
+    expect(isOk(parseResult(mutating))).toBe(false); // reads again: ok === false,
+    expect(reads).toBe(2); //                           and no `error` key
   });
 });
 
@@ -311,6 +380,61 @@ describe('never throws — hostile input', () => {
         throw new Error('accessor');
       },
     };
+    expectRejected(hostile, 'unreadable');
+  });
+
+  it('never throws across a hostile corpus, whatever the verdict', () => {
+    const revoked = Proxy.revocable({ ok: true, value: 1 }, {});
+    revoked.revoke();
+    const traps = [
+      'get',
+      'has',
+      'getOwnPropertyDescriptor',
+      'ownKeys',
+      'getPrototypeOf',
+      'defineProperty',
+      'deleteProperty',
+    ] as const;
+
+    const corpus: unknown[] = [
+      revoked.proxy,
+      ...traps.map((trap) =>
+        new Proxy(
+          { ok: false, error: 'e' },
+          {
+            [trap]: () => {
+              throw new Error(trap);
+            },
+          },
+        ),
+      ),
+      { get ok(): never { throw new Error('ok accessor'); } },
+      { ok: false, get error(): never { throw new Error('error accessor'); } },
+      { ok: true, value: 1, [Symbol.toPrimitive]: () => { throw new Error('tp'); } },
+      Object.freeze({ ok: true, value: 1 }),
+      Object.seal({ ok: false, error: 'e' }),
+      Object.create(null),
+      new Proxy({}, { ownKeys: () => { throw new Error('ownKeys'); } }),
+    ];
+
+    for (const value of corpus) {
+      expect(() => isResult(value)).not.toThrow();
+      expect(() => parseResult(value)).not.toThrow();
+      // And the two still agree — none of these mutates as it is read.
+      expect(isResult(value)).toBe(isOk(parseResult(value)));
+    }
+  });
+
+  it('survives a descriptor trap that throws only for `ok`', () => {
+    const hostile = new Proxy(
+      { ok: true, value: 1 },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          if (key === 'ok') throw new Error('selective trap');
+          return Object.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    );
     expectRejected(hostile, 'unreadable');
   });
 
@@ -364,6 +488,14 @@ describe('the failure payload itself (§2.1, §3)', () => {
     );
 
     expect('cause' in error).toBe(false);
+    // Exhaustive, not a string search: a needle test would pass against a
+    // `details` that carried the object under some other serialization.
+    expect(Object.keys(error).sort()).toStrictEqual([
+      'details',
+      'message',
+      'type',
+    ]);
+    expect(error.details).toStrictEqual({ reason: 'invalid_discriminant' });
     expect(JSON.stringify(error)).not.toContain('000-00-0000');
   });
 
@@ -375,30 +507,33 @@ describe('the failure payload itself (§2.1, §3)', () => {
     expect(a.message).toBe(b.message);
   });
 
-  it('gives a distinct message per reason', () => {
-    const reasons: MalformedResultReason[] = [
-      'not_an_object',
-      'unreadable',
-      'missing_discriminant',
-      'invalid_discriminant',
-      'error_dropped',
-    ];
+  it('gives a distinct message per reason, bound to that reason', () => {
+    // Paired, not zipped by index: two parallel arrays let either be reordered
+    // without failing, which would leave the reason-to-message binding — the
+    // thing under test — unpinned.
     const { proxy, revoke } = Proxy.revocable({}, {});
     revoke();
-    const samples: unknown[] = [
-      'primitive',
-      proxy,
-      {},
-      { ok: 1 },
-      { ok: false },
+    const cases: readonly (readonly [MalformedResultReason, unknown])[] = [
+      ['not_an_object', 'primitive'],
+      ['unreadable', proxy],
+      ['missing_discriminant', {}],
+      ['invalid_discriminant', { ok: 1 }],
+      ['error_dropped', { ok: false }],
     ];
 
-    const messages = samples.map((sample, index) => {
-      const error = expectRejected(sample, reasons[index] as MalformedResultReason);
-      return error.message;
-    });
+    const byReason = new Map<MalformedResultReason, string>();
+    for (const [reason, sample] of cases) {
+      byReason.set(reason, expectRejected(sample, reason).message);
+    }
 
-    expect(new Set(messages).size).toBe(reasons.length);
+    // Every reason produced a message, and no two share one.
+    expect(byReason.size).toBe(cases.length);
+    expect(new Set(byReason.values()).size).toBe(cases.length);
+    // And each is the message for *its* reason, not merely some unique string.
+    expect(byReason.get('error_dropped')).toContain('`error`');
+    expect(byReason.get('missing_discriminant')).toContain('`ok`');
+    expect(byReason.get('not_an_object')).toContain('object');
+    expect(byReason.get('unreadable')).toContain('could not be read');
   });
 
   it('tells the producer what to do about a dropped error', () => {
