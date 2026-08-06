@@ -22,7 +22,7 @@ are close enough to look interchangeable and different enough that nothing works
 | `result.unwrapOr(0)` | `unwrapOr(result, 0)` | The core is **free functions**; methods exist only on `/fluent`. |
 | `result.map(f)` | `map(result, f)` | Data-first: value is the first argument. |
 | `result.match(okFn, errFn)` | `match(result, { ok, err })` | **One object**, not two positional callbacks. The most common miscompile. |
-| `Result.combine([a, b])` | `combine([a, b])` | No static namespace. And ours is tuple-preserving. |
+| `Result.combine([a, b])` | `combine([a, b])` | No static namespace. And ours is tuple-preserving. A **record** works too — `combine({ user, posts })` — and returns one keyed identically. |
 | `result._unsafeUnwrap()` | `unwrapOrThrow(result)` | `_unsafeUnwrap` does not exist. |
 | `okAsync(v)` / `errAsync(e)` | *(no equivalent)* | Async is `Promise<Result>`, or `ResultAsync.from(...)` on `/fluent`. |
 | `ResultAsync.fromPromise(p, fn)` | `fromPromise(p, fn)` | Free function, at the root and on `/fluent`. |

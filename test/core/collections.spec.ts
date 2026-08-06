@@ -7,7 +7,7 @@ import {
   ok,
   partition,
 } from '../../src/index';
-import type { ErrTypeOf, OkTypeOf, Result } from '../../src/index';
+import type { ErrTypeOf, KeyedError, OkTypeOf, Result } from '../../src/index';
 
 /**
  * REMINDER: every `expectTypeOf` and `@ts-expect-error` below is enforced by
@@ -237,5 +237,352 @@ describe('OkTypeOf / ErrTypeOf', () => {
     expectTypeOf<
       ErrTypeOf<Result<User, NotFound> | Result<Order, Timeout>>
     >().toEqualTypeOf<NotFound | Timeout>();
+  });
+});
+
+/**
+ * The record ("object form") overload — [#95](https://github.com/alifaroo-q/result-kit/issues/95),
+ * [ADR 0017](../../docs/adr/0017-object-form-combine.md).
+ *
+ * The array assertions above are the baseline this must not move: the overload
+ * pair is safe precisely because an array of `Result`s is not assignable to
+ * `Record<string, Result<unknown, unknown>>`, so the record overload is
+ * unreachable for an array input. That assignability is pinned directly below
+ * rather than inferred from overload-resolution behaviour, so it survives a
+ * compiler upgrade.
+ */
+describe('combine — the record overload', () => {
+  it('allOk_returnsOkOfARecordKeyedIdentically', () => {
+    const result = combine({ user: okUser(), order: okOrder() });
+
+    expect(result).toEqual(ok({ user, order }));
+  });
+
+  it('allOk_preservesPerKeySuccessTypesAndUnionsTheErrors', () => {
+    const result = combine({ user: okUser(), order: okOrder() });
+
+    expectTypeOf(result).toEqualTypeOf<
+      Result<{ user: User; order: Order }, NotFound | Timeout>
+    >();
+  });
+
+  it('someErr_returnsTheFirstErrByIdentity', () => {
+    const first = errUser();
+
+    const result = combine({ a: okUser(), b: first, c: errOrder() });
+
+    expect(result).toBe(first);
+  });
+
+  it('integerLikeKeys_firstErrMeansPropertyOrderNotOrderAsWritten', () => {
+    // `Object.keys` yields integer-like keys in ascending numeric order BEFORE
+    // insertion-ordered string keys, so the fail-fast rule §5.4 states
+    // positionally becomes a rule about JS property order (F16).
+    const late = err(timeout);
+    const early = err(notFound);
+
+    expect(combine({ 10: late, 2: early })).toBe(early);
+  });
+
+  it('symbolKeyedErr_isSilentlyInvisible', () => {
+    // Documented, not closed: a symbol key does not join the string index
+    // signature, so it type-checks and is dropped. It matches the §2.1
+    // serialization boundary, and a per-call symbol scan would defend against a
+    // shape the type system cannot express usefully.
+    const key = Symbol('ignored');
+    const bag = { a: ok(1), [key]: err(notFound) };
+
+    expect(combine(bag)).toEqual(ok({ a: 1 }));
+  });
+
+  it('inheritedAndNonEnumerableProperties_doNotParticipate', () => {
+    const bag = Object.create({ inherited: err(notFound) }) as Record<
+      string,
+      Result<number, NotFound>
+    >;
+    bag.own = ok(1);
+    Object.defineProperty(bag, 'hidden', { value: err(notFound), enumerable: false });
+
+    expect(combine(bag)).toEqual(ok({ own: 1 }));
+  });
+
+  it('emptyRecord_isOkOfAnEmptyRecord', () => {
+    expect(combine({})).toEqual(ok({}));
+  });
+
+  it('protoKey_survivesAsAnOwnPropertyRatherThanSettingThePrototype', () => {
+    // `__proto__` is an accessor on `Object.prototype`, so the obvious
+    // `values[key] = …` sets the record's prototype instead of adding a key —
+    // and the record form's one promise is that the output is keyed
+    // identically to the input.
+    const bag = { ['__proto__']: ok(1), b: ok(2) } as Record<string, Result<number, never>>;
+
+    const result = combine(bag);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(Object.keys(result.value).sort()).toEqual(['__proto__', 'b']);
+    expect(Object.getPrototypeOf(result.value)).toBe(Object.prototype);
+  });
+
+  it('nonArrayIterable_throwsRatherThanReadingAsAnEmptyRecord', () => {
+    // Neither overload accepts one, but the dispatch would otherwise send it
+    // down the record path where `Object.keys(new Set(…))` is `[]` — a silent
+    // `ok({})` for input that plainly failed.
+    const set = new Set([ok(1), err('x')]) as unknown as Result<number, string>[];
+
+    expect(() => combine(set)).toThrow(
+      'combine: expected an array or a record of Results, but received a non-array iterable',
+    );
+    expect(() => combineWithAllErrors(set)).toThrow(
+      'combineWithAllErrors: expected an array or a record of Results, but received a non-array iterable',
+    );
+  });
+
+  it('optionalKey_keepsOptionalityOnTheSuccessSide', () => {
+    // `-?` is deliberately absent here: `posts?: Order | undefined` is what the
+    // caller actually has. See the error-side assertion in the next block.
+    const bag: { user: Result<User, NotFound>; posts?: Result<Order, Timeout> } = {
+      user: okUser(),
+    };
+
+    const result = combine(bag);
+
+    expectTypeOf(result).toEqualTypeOf<
+      Result<{ user: User; posts?: Order | undefined }, NotFound | Timeout>
+    >();
+  });
+
+  it('nonNullableIsRequired_notDefensive', () => {
+    // With an optional key `T[K]` is `Result<…> | undefined`, which fails
+    // `OkTypeOf`'s and `ErrTypeOf`'s `R extends Result<unknown, unknown>`
+    // constraint — the signature does not compile without `NonNullable`.
+    // @ts-expect-error - `Result | undefined` does not satisfy the constraint
+    type _RejectedOk = OkTypeOf<Result<User, NotFound> | undefined>;
+    // @ts-expect-error - the mirror, on the error side
+    type _RejectedErr = ErrTypeOf<Result<User, NotFound> | undefined>;
+
+    expectTypeOf<OkTypeOf<NonNullable<Result<User, NotFound> | undefined>>>()
+      .toEqualTypeOf<User>();
+  });
+
+  it('anArrayIsNotAssignableToTheRecordConstraint', () => {
+    // The whole safety argument for an overload pair rather than a new name:
+    // `length` and `push` are not `Result`s, so the record overload is
+    // unreachable for an array input regardless of declaration order (F14).
+    const rows: Result<User, NotFound>[] = [okUser()];
+
+    // @ts-expect-error - an array does not satisfy Record<string, Result<…>>
+    const bag: Record<string, Result<unknown, unknown>> = rows;
+
+    expect(bag).toBe(rows);
+  });
+});
+
+describe('combineWithAllErrors — the record overload', () => {
+  it('allOk_returnsOkOfARecordKeyedIdentically', () => {
+    const result = combineWithAllErrors({ user: okUser(), order: okOrder() });
+
+    expect(result).toEqual(ok({ user, order }));
+  });
+
+  it('someErr_accumulatesKeyedErrorEntriesInPropertyOrder', () => {
+    const result = combineWithAllErrors({
+      order: errOrder(),
+      user: errUser(),
+      fine: okUser(),
+    });
+
+    expect(result).toEqual(
+      err([
+        { key: 'order', error: timeout },
+        { key: 'user', error: notFound },
+      ]),
+    );
+  });
+
+  it('someErr_entriesAreADiscriminatedUnionKeyedByTheInputKey', () => {
+    const result = combineWithAllErrors({ user: errUser(), order: errOrder() });
+
+    expectTypeOf(result).toEqualTypeOf<
+      Result<
+        { user: User; order: Order },
+        (KeyedError<'user', NotFound> | KeyedError<'order', Timeout>)[]
+      >
+    >();
+  });
+
+  it('someErr_switchOnKeyNarrowsTheErrorToThatKeysVariant', () => {
+    const result = combineWithAllErrors({ user: errUser(), order: errOrder() });
+
+    if (result.ok) throw new Error('unreachable');
+
+    for (const entry of result.error) {
+      switch (entry.key) {
+        case 'user':
+          expectTypeOf(entry.error).toEqualTypeOf<NotFound>();
+          break;
+        case 'order':
+          expectTypeOf(entry.error).toEqualTypeOf<Timeout>();
+          break;
+      }
+    }
+  });
+
+  it('indexSignatureRecord_degradesHonestlyToAStringKey', () => {
+    const rows: Record<string, Result<User, NotFound>> = { a: errUser() };
+
+    const result = combineWithAllErrors(rows);
+
+    expectTypeOf(result).toEqualTypeOf<
+      Result<Record<string, User>, KeyedError<string, NotFound>[]>
+    >();
+  });
+
+  it('optionalKey_stripsOptionalityOnTheErrorSideOnly', () => {
+    // `-?` on the error mapped type and NOT on the success one. Without it the
+    // entry union gains `undefined` and `entry.error` reads as `E | undefined`
+    // — §10.6's failure mode, and the defect that sank the partial-record
+    // alternative. The success side keeps `posts?`, which is correct.
+    const bag: { user: Result<User, NotFound>; posts?: Result<Order, Timeout> } = {
+      user: okUser(),
+    };
+
+    const result = combineWithAllErrors(bag);
+
+    expectTypeOf(result).toEqualTypeOf<
+      Result<
+        { user: User; posts?: Order | undefined },
+        (KeyedError<'user', NotFound> | KeyedError<'posts', Timeout>)[]
+      >
+    >();
+  });
+
+  it('keyedErrors_bridgeToTheFlatFormattersByMappingTheErrorOut', () => {
+    // The one real cost of the asymmetry: `groupByType` / `prettifyErrors` take
+    // a flat `TypedError[]`, so a `KeyedError[]` must be unwrapped first.
+    const result = combineWithAllErrors({ user: errUser(), order: errOrder() });
+
+    if (result.ok) throw new Error('unreachable');
+
+    const flat = result.error.map((entry) => entry.error);
+
+    expect(flat).toEqual([notFound, timeout]);
+    expectTypeOf(flat).toEqualTypeOf<(NotFound | Timeout)[]>();
+  });
+
+  it('emptyRecord_isOkOfAnEmptyRecordRatherThanErrOfNoErrors', () => {
+    expect(combineWithAllErrors({})).toEqual(ok({}));
+  });
+
+  it('protoKey_survivesOnBothTheSuccessAndTheAccumulatedHalves', () => {
+    const bag = { ['__proto__']: err(notFound), b: ok(1) } as unknown as Record<
+      string,
+      Result<number, NotFound>
+    >;
+
+    const result = combineWithAllErrors(bag);
+
+    expect(result).toEqual(err([{ key: '__proto__', error: notFound }]));
+    expect(combineWithAllErrors({ ['__proto__']: ok(1) })).toEqual(
+      ok(Object.defineProperty({}, '__proto__', {
+        value: 1,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      })),
+    );
+  });
+});
+
+describe('the not-a-Result diagnostic', () => {
+  /**
+   * An optional key may carry `undefined` as a *present* own key, and a hole in
+   * a sparse array yields `undefined` identically. Reading `.ok` off it threw a
+   * bare `TypeError` naming neither the combinator nor the offending key — a
+   * handler that is itself the crash, the shape closed four times already in
+   * this package. It stays a hard failure, because a non-`Result` in the bag is
+   * a programming error, but it now reports through `render.ts`'s family.
+   */
+  it('recordEntryPresentButUndefined_throwsNamingTheKey', () => {
+    const bag = { user: okUser(), posts: undefined } as unknown as Record<
+      string,
+      Result<unknown, unknown>
+    >;
+
+    expect(() => combine(bag)).toThrow(
+      'combine: value at key "posts" is not a Result (received: undefined)',
+    );
+    expect(() => combineWithAllErrors(bag)).toThrow(
+      'combineWithAllErrors: value at key "posts" is not a Result (received: undefined)',
+    );
+  });
+
+  it('recordPath_validatesTheWholeBagBeforeReadingAnyOfIt', () => {
+    // Deterministic rather than hiding behind whichever `Err` came first —
+    // otherwise this returns cleanly today and crashes the first time `user`
+    // succeeds, a programming error hiding behind a data error on a schedule.
+    const bag = { user: errUser(), posts: undefined } as unknown as Record<
+      string,
+      Result<unknown, unknown>
+    >;
+
+    expect(() => combine(bag)).toThrow(/value at key "posts"/);
+  });
+
+  it('sparseArrayHole_throwsNamingTheIndex', () => {
+    // Reachable only through a cast, which is why the array path guards as
+    // visited rather than paying a second pass. This half is a fix to shipped
+    // behaviour: it used to be a bare `TypeError`.
+    const sparse = [okUser(), , okUser()] as unknown as Result<User, NotFound>[];
+
+    expect(() => combine(sparse)).toThrow(
+      'combine: value at index 1 is not a Result (received: undefined)',
+    );
+    expect(() => combineWithAllErrors(sparse)).toThrow(
+      'combineWithAllErrors: value at index 1 is not a Result (received: undefined)',
+    );
+  });
+
+  it('arrayPath_guardsAsVisitedSoAnEarlierErrStillShortCircuits', () => {
+    const sparse = [errUser(), , okUser()] as unknown as Result<User, NotFound>[];
+
+    expect(combine(sparse)).toEqual(err(notFound));
+  });
+
+  it('nonResultPayload_isRenderedThroughRenderPayloadAndNeverCrashes', () => {
+    // `renderPayload` rather than a bare interpolation: the offending value is
+    // arbitrary, and a circular object would make `JSON.stringify` throw a
+    // serializer crash in place of the diagnostic.
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const bag = { a: cyclic } as unknown as Record<string, Result<unknown, unknown>>;
+
+    expect(() => combine(bag)).toThrow(/combine: value at key "a" is not a Result/);
+  });
+
+  it('callableCarryingOk_isAdmittedRatherThanRejected', () => {
+    // The shared guard admits a callable for the reason §10.9 widened
+    // `isTypedError`: a function carrying `ok: true` is structurally an `Ok`
+    // and tsc assigns it, so a guard that rejected it would be narrower than
+    // the type it gates. The `/testing` matchers' guard and this one are the
+    // same function, so they cannot disagree about it.
+    const callable = Object.assign(() => {}, { ok: true as const, value: 1 });
+
+    expect(combine({ a: callable })).toEqual(ok({ a: 1 }));
+  });
+
+  it('revokedProxyEntry_propagatesRatherThanReportingASilentSuccess', () => {
+    // A pinned *limit*, not a feature, and inherited from the `/testing`
+    // matchers' guard, which is now literally the same function: a subject that
+    // explodes on read cannot be classified, so the throw surfaces it. What
+    // matters is that it does not quietly become an `Ok`. Unlike `renderPayload`
+    // and `schema.ts`'s classifier — which swallow, because a *reporter* that
+    // crashes replaces the answer — this one classifies.
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    const bag = { a: proxy } as unknown as Record<string, Result<unknown, unknown>>;
+
+    expect(() => combine(bag)).toThrow(TypeError);
   });
 });

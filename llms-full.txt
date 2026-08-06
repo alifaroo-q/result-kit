@@ -141,7 +141,7 @@ Practical consequences when writing code:
 
 ## 3. Root API — the complete surface
 
-`@zireal/result-kit` exports **37 values and 13 types** from one flat barrel.
+`@zireal/result-kit` exports **37 values and 14 types** from one flat barrel.
 Import only what you use; the package is `sideEffects: false` and genuinely
 tree-shakable — import three functions and ship three functions.
 
@@ -210,6 +210,66 @@ combine([ok(1), ok('a')]);   // Result<[number, string], never> — a tuple, not
 `combineWithAllErrors` is the motivating source for `groupByType` and
 `prettifyErrors`. `partition`'s second half is an equally valid input to both.
 
+#### The record ("object form") overload
+
+Both combinators also accept a **record** and return one keyed identically.
+`partition` does **not** — record support is a property of the combinators, not
+of the section. The array signatures are unchanged: an array of `Result`s is not
+assignable to `Record<string, Result<unknown, unknown>>`, so the record overload
+is unreachable for an array input and tuple preservation cannot degrade.
+
+```ts
+const combined = combine({ user: findUser(id), posts: listPosts(id) });
+if (combined.ok) {
+  const { user, posts } = combined.value;  // names survive; order does not matter
+}
+```
+
+The record form of `combineWithAllErrors` accumulates `KeyedError<K, E>` entries
+— `{ readonly key: K; readonly error: E }` — instead of a flat array. The pair is
+**knowingly asymmetric**: a record knows the name of each part, and throwing that
+away is the only reason not to pass one. The array form stays flat.
+
+```ts
+const checked = combineWithAllErrors({ name: checkName(i), age: checkAge(i) });
+if (!checked.ok) {
+  for (const entry of checked.error) {
+    switch (entry.key) {
+      case 'name': /* entry.error narrows to checkName's error type */ break;
+      case 'age':  /* ...and to checkAge's here */ break;
+    }
+  }
+}
+```
+
+**The bridge, and it is the one real cost.** `groupByType` and `prettifyErrors`
+take a flat `TypedError[]`, and a `KeyedError[]` is not one:
+
+```ts
+prettifyErrors(checked.error.map((e) => e.error));
+```
+
+Four more facts, each decided rather than incidental:
+
+- **"First Err" means property order, not order as written.**
+  `combine({ 10: late, 2: early })` returns `early` — `Object.keys` yields
+  integer-like keys in ascending numeric order *before* insertion-ordered string
+  keys. `combineWithAllErrors` accumulates in that same order. Only own
+  enumerable properties participate.
+- **Symbol keys are silently invisible.** A symbol-keyed `Err` does not join the
+  string index signature, so it type-checks and is dropped. Documented rather
+  than closed: it matches the §2.1 serialization boundary.
+- **`combine({})` is `ok({})`** — the empty-input identity in record form. An
+  empty *array* still picks the array overload, so the two never contend.
+- **A value in the bag that is not a `Result` throws a named diagnostic**, e.g.
+  `combine: value at key "posts" is not a Result (received: undefined)`. An
+  optional key may carry `undefined` as a *present* own key. It stays a hard
+  failure — a non-`Result` in the bag is a programming error — but it names the
+  key instead of throwing a bare `TypeError`. The array path takes the same
+  guard, since a hole in a sparse array yields `undefined` identically. The
+  record path validates the whole bag first, so the diagnostic is deterministic;
+  the array path guards as visited, so the hot path pays no second pass.
+
 ### Error matching
 
 ```ts
@@ -219,7 +279,9 @@ matchType(error, arms, fallback)  // partial arms; fallback sees only the RESIDU
 
 ### Formatters
 
-Presentation over the `TypedError[]` that `combineWithAllErrors` accumulates.
+Presentation over the `TypedError[]` that `combineWithAllErrors` accumulates
+*from an array input*. Its record form accumulates `KeyedError`s, which reach
+these by `errors.map((e) => e.error)`.
 
 ```ts
 groupByType(errors)    // -> a PARTIAL record keyed by `type`; groups keep their narrowed variant
@@ -268,7 +330,7 @@ These live on the **root barrel** and need no test runner. They are not the
 
 `Result` `Ok` `Err` `TypedError` `ErrorCtor` `ErrorsOf` `OkTypeOf` `ErrTypeOf`
 `ValidationIssue` `ValidationFailed` `FromSchemaOptions` `MalformedResult`
-`MalformedResultReason`
+`MalformedResultReason` `KeyedError`
 
 ---
 

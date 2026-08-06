@@ -565,11 +565,11 @@ export type { OkTypeOf, ErrTypeOf };        // §5.4 — see §10
 | Do-notation (2) | `safeTry` `safeUnwrap` | §5.7 |
 | Assertions (2) | `expectOk` `expectErr` | §5.12 |
 
-**Types (13):** `Result` `Ok` `Err` `TypedError` `ErrorCtor` `ErrorsOf` `OkTypeOf` `ErrTypeOf` `MalformedResult` `MalformedResultReason` `FromSchemaOptions` `ValidationFailed` `ValidationIssue`
+**Types (14):** `Result` `Ok` `Err` `TypedError` `ErrorCtor` `ErrorsOf` `OkTypeOf` `ErrTypeOf` `MalformedResult` `MalformedResultReason` `FromSchemaOptions` `ValidationFailed` `ValidationIssue` `KeyedError`
 
 > **Reconciled 2026-08-06 against the shipped barrel — was "Values (33)" / "Types (9)".** The table had not tracked four exports added since it was written (`fromSchema` / `fromSchemaAsync`, `isResult` / `parseResult`) or their five types, and the same drift had reached §4's diagram and §5's opening sentence as a *different* wrong number (29). The counts above are now those of `src/index.ts`, and they agree with `llms-full.txt` — pinned by `test/docs/agent-kit.spec.ts`, which is the guard that actually held throughout and is why the drift went unnoticed. **That guard, not this table, remains the source of truth**: it reads the barrel, and this table is hand-maintained.
 >
-> **`KeyedError` is specified but not yet shipped**, so it is deliberately absent above. §5.4's record overloads declare it and [ADR 0017](../adr/0017-object-form-combine.md) records the bump; when they land it becomes the **14th** type here and in `llms-full.txt`, in the same commit.
+> **`KeyedError` shipped in [#95](https://github.com/alifaroo-q/result-kit/issues/95)** and is the **14th** type above, added here and in `llms-full.txt` in the same commit as the §5.4 record overloads that declare it, exactly as this note required while it was still pending. `Types (13)` was correct only for as long as the overloads were unimplemented.
 >
 > **Closed [#96](https://github.com/alifaroo-q/result-kit/issues/96) (2026-08-06): the three groups that had no §5 subsection now have one.** The schema adapters, envelope parsing and the assertions had each landed against an ADR or an issue rather than a spec group, so the `Specified in` column carried an em dash — this document claimed authority over signatures it did not state, for six of the 37 values and five of the 13 types. They are §5.10, §5.11 and §5.12; the note below the export list explains why they sit after it rather than beside their siblings.
 

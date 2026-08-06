@@ -264,6 +264,19 @@ const booking = parseBooking(result.value);   // fromSchema — payload proven
 | `combineWithAllErrors(results)` | Same, but collects *every* error into an array |
 | `partition(results)` | Split into `[values, errors]` — both halves, always |
 
+Both combinators also take a **record** and return one keyed identically, so the success side is read by name rather than by position. `partition` does not.
+
+```ts
+const combined = combine({ user: findUser(id), posts: listPosts(id) });
+if (combined.ok) {
+  const { user, posts } = combined.value;
+}
+```
+
+The record form of `combineWithAllErrors` accumulates `KeyedError<K, E>` entries — `{ key, error }` — instead of a flat array, so a failure says *which* key produced it and `switch (entry.key)` narrows `error` to that key's variant. The array form stays flat. Because of that split, a `KeyedError[]` is not accepted by `groupByType` or `prettifyErrors`; bridge with `errors.map((e) => e.error)`.
+
+Over a record, "first `Err`" means **property order** — `Object.keys` yields integer-like keys in ascending numeric order before insertion-ordered ones — over own enumerable keys only. Symbol keys are silently invisible, and `combine({})` is `ok({})`. A value in the bag that is not a `Result` throws a diagnostic naming the key.
+
 **Error matching** — dispatch over a `TypedError` union (see [below](#matching-on-the-error-type))
 
 | | |
@@ -271,7 +284,7 @@ const booking = parseBooking(result.value);   // fromSchema — payload proven
 | `matchType(error, arms)` | One arm per variant, each narrowed. A missing arm is a compile error |
 | `matchType(error, arms, fallback)` | Partial arms; the fallback sees only the **residual** variants |
 
-**Formatters** — presentation over the `TypedError[]` that `combineWithAllErrors` accumulates
+**Formatters** — presentation over the `TypedError[]` that `combineWithAllErrors` accumulates *from an array input* (its record form accumulates `KeyedError`s, which reach these by `errors.map((e) => e.error)`)
 
 | | |
 |---|---|
