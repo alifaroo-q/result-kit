@@ -5,7 +5,7 @@ import {
   ok as coreOk,
   safeUnwrap,
 } from '../../src/index';
-import type { Result } from '../../src/index';
+import type { Err, Result } from '../../src/index';
 import * as fluent from '../../src/fluent/index';
 import { ResultAsync, from, ok, safeTry } from '../../src/fluent/index';
 import type { ResultChain } from '../../src/fluent/index';
@@ -428,5 +428,321 @@ describe('§2 is untouched — the core union stays plain data', () => {
     }
 
     expect(typeof body).toBe('function');
+  });
+});
+
+/**
+ * The hostile-edge mirror (#85, item 1) — the same pathological bodies the
+ * Effect.gen comparison spike ran against the core runner
+ * (`spikes/effect-gen-comparison`, experiments 03 / 04 / 05; findings F1, F3,
+ * F4, F5, F7, F20), re-aimed at `/fluent`.
+ *
+ * **Why these are not duplicates of `test/core/do-notation.spec.ts`.** The core
+ * blocks drive a *core* `safeUnwrap` generator from the *core* runner. Here both
+ * ends are different: the yielded step is the wrapper's own
+ * `[Symbol.iterator]`, which `yield*`s the core adapter — so the unwind
+ * `release` drives crosses **two** levels of generator delegation rather than
+ * one — and the answer leaves through `/fluent`'s `safeTry`, which re-wraps it
+ * (`ResultAsync.from(Promise.resolve(settled).then(toPlain))` on the async
+ * side). The delegation is the thing under test; nothing above asserted it, and
+ * the spike ran none of these through the wrapper.
+ */
+
+const chainOk = (value: number): ResultChain<number, never> => ok(value);
+const chainFailing = (error: string): ResultChain<never, string> =>
+  fluent.err(error);
+const asyncFailing = (error: string): ResultAsync<never, string> =>
+  ResultAsync.from(Promise.resolve(coreErr(error)));
+
+describe('a yielded wrapper inside a finally that runs during close (F1)', () => {
+  it('safeTry_innerFinallyYieldsAChainMidClose_stillRunsTheOuterFinally', () => {
+    const log: string[] = [];
+
+    safeTry(function* (): Generator<Err<string>, ResultChain<number, never>> {
+      try {
+        try {
+          yield* chainFailing('first');
+
+          return ok(1);
+        } finally {
+          log.push('inner');
+          yield* chainFailing('cleanup-failed');
+        }
+      } finally {
+        log.push('outer');
+      }
+    });
+
+    expect(log).toEqual(['inner', 'outer']);
+  });
+
+  it('safeTry_innerFinallyYieldsAChainMidClose_keepsTheFirstErrAsTheAnswer', () => {
+    const chain = safeTry(function* (): Generator<
+      Err<string>,
+      ResultChain<number, never>
+    > {
+      try {
+        yield* chainFailing('first');
+
+        return ok(1);
+      } finally {
+        yield* chainFailing('cleanup-failed');
+      }
+    });
+
+    expect(chain.toResult()).toEqual(coreErr('first'));
+  });
+
+  it('safeTry_innerFinallyYieldsAChainMidClose_stillReturnsAResultChain', () => {
+    // The unwind must not disturb which half of the dual runner answers: a
+    // `function*` body owes a `ResultChain`, not a `ResultAsync`.
+    const chain = safeTry(function* (): Generator<
+      Err<string>,
+      ResultChain<number, never>
+    > {
+      try {
+        yield* chainFailing('first');
+
+        return ok(1);
+      } finally {
+        yield* chainFailing('cleanup-failed');
+      }
+    });
+
+    expect(chain.constructor.name).toBe('ResultChain');
+  });
+
+  it('safeTry_asyncFinallyYieldsAResultAsyncMidClose_settlesOnlyAfterTheFullUnwind', async () => {
+    // Discriminating probe, as in the core suite: the outer cleanup awaits, so
+    // only a release that follows the unwind across every re-suspension — and
+    // survives `/fluent`'s extra `.then(toPlain)` layer — sees it before the
+    // returned `ResultAsync` settles.
+    const log: string[] = [];
+
+    const settled = await safeTry(async function* (): AsyncGenerator<
+      Err<string>,
+      ResultChain<number, never>
+    > {
+      try {
+        try {
+          yield* asyncFailing('first');
+
+          return ok(1);
+        } finally {
+          yield* asyncFailing('cleanup-failed');
+        }
+      } finally {
+        await Promise.resolve();
+        log.push('outer');
+      }
+    }).toResult();
+    log.push('settled');
+
+    expect(log).toEqual(['outer', 'settled']);
+    expect(settled).toEqual(coreErr('first'));
+  });
+});
+
+/**
+ * F5 and F20, which are one rule — "first `Err` wins" — with two visible
+ * outcomes. Worth pinning at `/fluent` because the discarded override here is a
+ * **wrapper**: the dual constructor makes `return ok(999)` inside a `finally`
+ * produce a `ResultChain`, a shape `BodyReturn` genuinely admits, so "ignored"
+ * has to mean ignored rather than unwrapped-then-ignored.
+ */
+describe('cleanup cannot re-route the answer, but is reported on success (F5/F20)', () => {
+  it('safeTry_finallyReturningAChainDuringClose_isIgnored', () => {
+    const chain = safeTry(function* (): Generator<
+      Err<string>,
+      ResultChain<number, never>
+    > {
+      try {
+        yield* chainFailing('boom');
+
+        return ok(1);
+      } finally {
+        // eslint-disable-next-line no-unsafe-finally
+        return ok(999);
+      }
+    });
+
+    expect(chain.toResult()).toEqual(coreErr('boom'));
+  });
+
+  it('safeTry_cleanupErrOnTheSuccessPath_becomesTheAnswer', () => {
+    // The asymmetry F20 measured: a cleanup `Err` is swallowed on the failure
+    // path and *reported* on the success path, because `return ok(1)` enters
+    // the `finally` and its yield is the first `.next()`.
+    const chain = safeTry(function* (): Generator<
+      Err<string>,
+      ResultChain<number, never>
+    > {
+      try {
+        return ok(1);
+      } finally {
+        yield* chainFailing('close-failed');
+      }
+    });
+
+    expect(chain.toResult()).toEqual(coreErr('close-failed'));
+  });
+});
+
+/**
+ * F4 — there is no defect channel, and `/fluent` adds none. A throw must not
+ * become an `Err`, and must not be smuggled into a wrapper the caller would
+ * have to remember to inspect.
+ */
+describe('a throw is propagated, not converted into a wrapper (F4)', () => {
+  it('safeTry_syncBodyThrows_throwsRatherThanReturningAWrapper', () => {
+    expect(() =>
+      safeTry(function* (): Generator<Err<never>, ResultChain<number, never>> {
+        throw new Error('boom');
+      }),
+    ).toThrow('boom');
+  });
+
+  it('safeTry_finallyThrowsDuringClose_winsOverTheShortCircuitErr', () => {
+    // Runner behaviour, not language behaviour: the throw escapes from the
+    // `.return()` that `release` drives, so it replaces the `ResultChain` the
+    // signature promised.
+    expect(() =>
+      safeTry(function* (): Generator<Err<string>, ResultChain<number, never>> {
+        try {
+          yield* chainFailing('first');
+
+          return ok(1);
+        } finally {
+          throw new Error('cleanup-threw');
+        }
+      }),
+    ).toThrow('cleanup-threw');
+  });
+
+  it('safeTry_asyncBodyThrows_rejectsTheReturnedResultAsync', async () => {
+    const wrapped = safeTry(async function* (): AsyncGenerator<
+      Err<never>,
+      ResultChain<number, never>
+    > {
+      throw new Error('boom');
+    });
+
+    await expect(wrapped.toResult()).rejects.toThrow('boom');
+  });
+
+  it('safeTry_asyncFinallyThrowsDuringClose_rejectsRatherThanSettlingWithTheErr', async () => {
+    const wrapped = safeTry(async function* (): AsyncGenerator<
+      Err<string>,
+      ResultChain<number, never>
+    > {
+      try {
+        yield* asyncFailing('first');
+
+        return ok(1);
+      } finally {
+        await Promise.resolve();
+        throw new Error('cleanup-threw');
+      }
+    });
+
+    await expect(wrapped.toResult()).rejects.toThrow('cleanup-threw');
+  });
+});
+
+/**
+ * F7 — reuse. An `Effect` is a re-runnable description and a generator is
+ * single-shot, which is why Effect's eager gen has to detect re-execution. The
+ * wrapper sits on the other side of that trade: it holds a **settled** `Result`
+ * and hands out a fresh generator per `[Symbol.iterator]()` call, so it is
+ * re-iterable *and* has no side effects to restart. Driving one past its
+ * short-circuit by hand is still the diagnosable mistake it is at root — and
+ * that diagnostic reaches the caller only because the wrapper delegates.
+ */
+describe('driving a wrapper iterator by hand (F7)', () => {
+  it('resultChainIterator_resumedAfterShortCircuit_throwsTheSafeTryDiagnostic', () => {
+    const iterator = chainFailing('boom')[Symbol.iterator]();
+    iterator.next();
+
+    expect(() => iterator.next()).toThrow('drive it with safeTry');
+  });
+
+  it('resultAsyncIterator_resumedAfterShortCircuit_rejectsWithTheSafeTryDiagnostic', async () => {
+    const iterator = asyncFailing('boom')[Symbol.asyncIterator]();
+    await iterator.next();
+
+    await expect(iterator.next()).rejects.toThrow('drive it with safeTry');
+  });
+
+  it('resultChain_iteratedTwice_yieldsTheSameErrEachTime', () => {
+    const chain = chainFailing('boom');
+
+    const first = chain[Symbol.iterator]().next().value;
+    const second = chain[Symbol.iterator]().next().value;
+
+    expect(second).toEqual(first);
+  });
+
+  it('safeTry_drivingTheSameChainTwice_returnsTheSameAnswer', () => {
+    const chain = chainOk(1);
+    const body = function* (): Generator<Err<never>, ResultChain<number, never>> {
+      return ok(yield* chain);
+    };
+
+    expect(safeTry(body).toResult()).toEqual(safeTry(body).toResult());
+  });
+});
+
+/**
+ * F3 / §10.11 at the *yield* slot. §2's union is brandless, so a structurally
+ * valid `Err` may carry a callable `then` — and `from()` will happily wrap one.
+ * The sync path is immune only because `isSettledResult` asks Result-first, and
+ * the wrapper inherits that immunity rather than restating it. The existing
+ * §10.11 block above covers the body's *return* slot; this covers the step.
+ */
+describe('a thenable-carrying Err yielded through the wrapper (F3, §10.11)', () => {
+  const sneakyErr = (calls: { count: number }): Result<number, string> =>
+    ({
+      ok: false,
+      error: 'real-error',
+      then(resolve: (value: unknown) => void) {
+        calls.count += 1;
+        resolve({ hijacked: true });
+      },
+    }) as unknown as Result<number, string>;
+
+  it('resultChainIterator_onAThenableCarryingErr_yieldsItByIdentity', () => {
+    const calls = { count: 0 };
+    const hostile = sneakyErr(calls);
+
+    const yielded = from(hostile)[Symbol.iterator]().next().value;
+
+    expect(yielded).toBe(hostile);
+  });
+
+  it('resultChainIterator_onAThenableCarryingErr_neverCallsItsThen', () => {
+    const calls = { count: 0 };
+
+    from(sneakyErr(calls))[Symbol.iterator]().next();
+
+    expect(calls.count).toBe(0);
+  });
+
+  it('safeTry_shortCircuitingOnAThenableCarryingErr_returnsAResultChain', () => {
+    // The failure this pins is a wrapper swap: asking "is this thenable?"
+    // before "is this settled?" would hand a synchronous body's answer back as
+    // a `ResultAsync`, and the `then` above never settles — so the call site
+    // would hang rather than fail.
+    const calls = { count: 0 };
+
+    const chain = safeTry(function* (): Generator<
+      Err<string>,
+      ResultChain<number, never>
+    > {
+      yield* from(sneakyErr(calls));
+
+      return ok(1);
+    });
+
+    expect(chain.constructor.name).toBe('ResultChain');
   });
 });
