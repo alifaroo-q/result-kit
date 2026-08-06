@@ -263,3 +263,123 @@ is the ADR's call, not the spike's.
 | F11 seam has no name | Evidence against; `/fluent`'s `.toAsync()` is strictly better |
 | F12 sound + diagnostically neutral | No safety objection — adoption is purely an ergonomics/scope call |
 | F13 `flow` | **Decline**, unconditionally |
+
+---
+
+# Part 3 — object-form `combine` (#89)
+
+Experiments `10-object-combine.spike.ts` (candidates + runtime) and
+`11-object-combine-types.spike.ts` (type assertions, enforced by the spike's own
+`tsc --noEmit`, proven red against a flipped `expectTypeOf`).
+
+Prior art read: `effect@4.0.0-beta.104` `packages/effect/src/Effect.ts` — `all`
+accepts tuple, iterable **and** record through *one* signature
+(`const Arg extends Iterable<…> | Record<string, …>`) and dispatches inside a
+conditional return type (`All.Return`), not through overloads.
+
+## F14 — the two overloads cannot collide, so tuple preservation is not at risk
+
+The central worry in the ticket does not materialise. An array of `Result`s is
+**not** assignable to `Record<string, Result<unknown, unknown>>` — `length`,
+`push` and friends are not `Result`s — so the record overload is *unreachable*
+for an array input regardless of ordering. Pinned directly
+(`const _: ResultRecord = rows` is a `@ts-expect-error`) rather than inferred
+from overload-resolution behaviour, so the claim survives a compiler upgrade.
+
+With the record overload added beneath the shipped one, every array-side
+assertion is byte-identical to the baseline taken against the shipped `combine`:
+heterogeneous tuple, homogeneous collapse, and `Result<[], never>` for `[]`.
+**Adding the record form degrades nothing.**
+
+## F15 — Effect's single-signature spelling is the wrong import here
+
+Two costs, one fatal:
+
+1. **`const T` leaks `readonly` into the success value.** `combine(roRows)` ships
+   `Result<number[], NotFound>`; the unified form returns
+   `Result<readonly number[], NotFound>`, and an array literal yields a
+   `readonly` tuple. That is a visible change to an already-shipped signature at
+   call-sites that have nothing to do with the record feature. Effect can afford
+   it because `all` was born that way.
+2. **The conditional needs `infer`-in-place, not `OkTypeOf<T[K]>`.** Inside a
+   conditional's true branch `T` is not narrowed for a mapped type's index, so
+   the constraint fails on a branch that is only reachable when it holds. This
+   is why `All.Return` is written the way it is; recorded because the first
+   draft here made exactly that mistake.
+
+A predicted third cost was **wrong and is withdrawn**: the deferred
+`CombineReturn<T>` was expected to repeat §10.9's `SettledOr` failure, but its
+*constraint* is the union of both branches — every one a `Result` — so `.ok` is
+readable and narrowing works inside a generic wrapper. Both candidates behave
+identically there.
+
+**Recommendation: two overloads, shipped signature first, verbatim.**
+
+## F16 — "first `Err`" over a record is not "first as written"
+
+`combine({ 10: late, 2: early })` returns `early`. `Object.keys` yields
+integer-like keys in ascending numeric order *before* insertion-ordered string
+keys — so the fail-fast rule §5.4 states positionally becomes a rule about JS
+property order the moment the input is a record. Accumulation inherits it:
+`combineWithAllErrors` reports key `2` before key `10`.
+
+Not a defect, but §5.4's sentence ("the **first** `Err`", "in input order")
+stops being true as written and the amendment must say *property order*.
+
+Three neighbouring facts, all pinned:
+
+- **Symbol keys are invisible.** A symbol-keyed `Err` does not participate in the
+  string index signature, so it type-checks and is silently dropped —
+  `combine({ a: ok(1), [s]: err(…) })` succeeds.
+- **Inherited and non-enumerable properties are ignored.** Own-enumerable only,
+  which matches `parse.ts`'s `propertyIsEnumerable` rule.
+- **Optional keys are accepted, and that is the one runtime hole.**
+  `{ user: Result; posts?: Result }` satisfies the constraint and maps through to
+  `{ user: number; posts?: string | undefined }` — correct. But a value of that
+  type may carry `posts: undefined` as a *present* own key; the loop reads `.ok`
+  off `undefined` and throws. Same handler-shape as the four crashes already
+  closed elsewhere in this codebase, and it must be decided before shipping
+  (skip nullish entries, or throw a diagnostic rather than a bare `TypeError`).
+
+## F17 — key attribution: three shapes, and only one keeps both properties
+
+`combineWithAllErrors`'s flat `E[]` cannot say *which* input failed. Over an
+array the key is the index, recoverable in principle; over a record it is simply
+gone. Three candidates, all implemented and typed:
+
+| | attribution | order | still an array | per-key narrowing |
+| --- | --- | --- | --- | --- |
+| **A** flat `E[]` (status quo) | ✗ | ✓ | ✓ | ✗ |
+| **B** partial record `{ user?: NotFound }` | ✓ | ✗ | ✗ | ✓ |
+| **C** entries `{ key, error }[]` | ✓ | ✓ | ✓ | ✓ (discriminated) |
+
+- **B** costs §5.4's "flat array in input order" sentence outright: `.map` on the
+  error is a compile error, so a caller migrating from the array form breaks.
+  Its keys are optional, so reading one gives `E | undefined` — §10.6's failure
+  mode, unavoidable for this shape.
+- **C** keeps `key` and `error` *correlated* per entry, so `switch (entry.key)`
+  narrows `error` to that key's variant. Over an index-signature record it
+  degenerates honestly to `{ key: string; error: E }`.
+- **A** is the only one that keeps the two combinators' error shapes identical
+  across array and record inputs.
+
+Neither B nor C has a hole A does not: all three type a failure that carries no
+errors (`[]`, `{}`), a state the runtime never produces.
+
+## The open question this spike does not answer
+
+Whether `combineWithAllErrors`'s record form may **differ in shape** from its
+array form is a design call, not a measurement:
+
+- **A** — one error shape for both input shapes; the record form is then strictly
+  less useful than the array form it mirrors, since the index at least survives
+  as a position.
+- **C** — the record form is *better*, and the array form is left behind
+  asymmetric (unless it also grows entries, which is a breaking change).
+
+| Learning | Action |
+| --- | --- |
+| F14 overloads cannot collide | Tuple preservation is safe; the ticket's central risk is disproved |
+| F15 `const T` leaks `readonly` | Take the overload pair, not Effect's unified signature |
+| F16 property order, symbols, optional keys | §5.4's wording must change; the present-`undefined` crash needs a decision |
+| F17 A/B/C measured | C dominates B; A-vs-C is a symmetry call for the amendment |
