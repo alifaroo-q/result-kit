@@ -560,10 +560,10 @@ export type { OkTypeOf, ErrTypeOf };        // §5.4 — see §10
 | Collections (3) | `combine` `combineWithAllErrors` `partition` | §5.4 |
 | Interop (3) | `fromNullable` `fromPredicate` `fromThrowable` | §5.5 |
 | Async constructors (2) | `fromPromise` `fromThrowableAsync` | §5.6 |
-| Schema adapters (2) | `fromSchema` `fromSchemaAsync` | — [ADR 0015](../adr/0015-standard-schema-issue-mapping.md) |
-| Envelope parsing (2) | `isResult` `parseResult` | — [#66](https://github.com/alifaroo-q/result-kit/issues/66) |
+| Schema adapters (2) | `fromSchema` `fromSchemaAsync` | §5.10 |
+| Envelope parsing (2) | `isResult` `parseResult` | §5.11 |
 | Do-notation (2) | `safeTry` `safeUnwrap` | §5.7 |
-| Assertions (2) | `expectOk` `expectErr` | — [ADR 0011](../adr/0011-testing-subpath-matchers.md) |
+| Assertions (2) | `expectOk` `expectErr` | §5.12 |
 
 **Types (13):** `Result` `Ok` `Err` `TypedError` `ErrorCtor` `ErrorsOf` `OkTypeOf` `ErrTypeOf` `MalformedResult` `MalformedResultReason` `FromSchemaOptions` `ValidationFailed` `ValidationIssue`
 
@@ -571,9 +571,118 @@ export type { OkTypeOf, ErrTypeOf };        // §5.4 — see §10
 >
 > **`KeyedError` is specified but not yet shipped**, so it is deliberately absent above. §5.4's record overloads declare it and [ADR 0017](../adr/0017-object-form-combine.md) records the bump; when they land it becomes the **14th** type here and in `llms-full.txt`, in the same commit.
 >
-> **Three groups have no §5 subsection** — the schema adapters, envelope parsing, and the assertions each landed against an ADR or an issue rather than a spec group, and the "Specified in" column says so with an em dash rather than inventing a section number. Writing those subsections is separate work; it is a documentation gap, not a count error, and this pass deliberately did not re-open what is exported.
+> **Closed [#96](https://github.com/alifaroo-q/result-kit/issues/96) (2026-08-06): the three groups that had no §5 subsection now have one.** The schema adapters, envelope parsing and the assertions had each landed against an ADR or an issue rather than a spec group, so the `Specified in` column carried an em dash — this document claimed authority over signatures it did not state, for six of the 37 values and five of the 13 types. They are §5.10, §5.11 and §5.12; the note below the export list explains why they sit after it rather than beside their siblings.
 
 **Not exported from root:** `ResultChain`, `ResultAsync`, `from` — these are `/fluent` only, and §7.3's guard enforces it.
+
+> **Why §5.10–§5.12 sit *after* the export list** ([#96](https://github.com/alifaroo-q/result-kit/issues/96), 2026-08-06). Reading order would put these three groups beside their siblings, between §5.7 and §5.8 — but that renumbers §5.8 and §5.9, and **§5.9 is cited by [ADR 0010](../adr/0010-v2-error-formatter-helpers.md), [ADR 0016](../adr/0016-declining-root-pipe-flow-dual.md) and [ADR 0017](../adr/0017-object-form-combine.md)**, which are append-only and so cannot be corrected to follow. A renumber does not break a link; it silently redirects three ADRs to the wrong section, which is worse. `CLAUDE.md` cites §5.9 repeatedly for the same reason. The number is load-bearing, the ordering is not, so the ordering gave way. §5.9's `Specified in` column points forward.
+>
+> **§3 was considered and rejected for all three.** §3.4 and §3.5 live in §3 rather than §5 on a stated test — they operate on a `TypedError` or a `TypedError[]`, *not* on a `Result`. All six functions here fail that test in the other direction: `fromSchema` and `parseResult` **return** a `Result`, and `expectOk` / `expectErr` **take** one. That `ValidationFailed` and `MalformedResult` happen to be `TypedError`s is incidental — it describes what rides in the `E` channel, not what the function operates on, and §5.4's `combineWithAllErrors` is already a §5 member by the same reasoning. Recorded because the test is easy to apply backwards.
+
+### 5.10 Schema adapters (2)
+
+Source: [ADR 0015](../adr/0015-standard-schema-issue-mapping.md), shipped in [#61](https://github.com/alifaroo-q/result-kit/issues/61). **Not in §5.5** despite being a sixth way *into* the `Result` world: it brings two public types and a vendored third-party interface with it, which is §3.4's argument for `format.ts`.
+
+```ts
+export interface ValidationIssue {
+  readonly message: string;
+  readonly path: readonly (string | number)[];
+}
+
+export type ValidationFailed = TypedError<
+  'validation_failed',
+  { readonly issues: readonly ValidationIssue[] }
+>;
+
+export interface FromSchemaOptions {
+  readonly includeCause?: boolean;   // default false
+}
+
+export function fromSchema<S extends StandardSchemaV1>(
+  schema: S,
+  options?: FromSchemaOptions,
+): (input: unknown) => Result<InferOutput<S>, ValidationFailed>;
+
+export function fromSchemaAsync<S extends StandardSchemaV1>(
+  schema: S,
+  options?: FromSchemaOptions,
+): (input: unknown) => Promise<Result<InferOutput<S>, ValidationFailed>>;
+```
+
+`StandardSchemaV1` is **vendored, not depended on** — the spec package is types-only, and a `.d.ts` rollup that re-emitted a type-only import of it would put a bare specifier in a shipped artifact, the class §7.3's guard exists to catch. It is exported from the module but **not from the barrel**, so it is absent from §5.9's type list by design — do not read it as one of the 13. `InferOutput` is internal, read off `~standard.types` rather than inferred from `validate`'s return.
+
+Both are **lazy**, returning a reusable parse function — §5.5's `fromThrowable` shape, for its reason.
+
+Six constraints, each of which cost something to establish:
+
+1. **`E` is one `TypedError`, never an array** ([ADR 0015](../adr/0015-standard-schema-issue-mapping.md) §1). A `Result` has one error channel; an array in `E` forces `matchType`, `isTypedError`, `.is()` and `unwrapOrThrow` to each special-case it. Accumulation lands one level up, via §5.4's `combineWithAllErrors` across several validated inputs.
+2. **The tag is a fixed literal**, not overridable — a stable tag keeps every consumer's error union and §3.5 exhaustiveness predictable, and re-tagging is a one-line `mapErr`.
+3. **`ValidationIssue` carries the two fields Standard Schema *defines*, and no more.** Only `message` is *guaranteed* — the vendor `path` is optional and heterogeneous (`PropertyKey | { key: PropertyKey }`, `symbol` included), which is what clause 4's normalization exists to absorb; `ValidationIssue.path` is always present because this adapter makes it so, not because the vendor promised it. Vendor extras — Zod's `code`, `expected`, `input` — are **dropped**. The trade is real: branching on *what kind* of failure occurred is not possible from the portable payload. A `details` that varies between Zod, Valibot and ArkType is not an adapter, and Zod's `input` is a live route for PII, a `BigInt` or a cycle into the one field §2.1 promises is JSON-safe.
+4. **`path` is an array and always present** (`[]` is the root), never a dotted string — a dotted string cannot round-trip a key containing a dot, and it is one `join` away from this. Segment coercion is **total**: `string` and *finite* `number` pass through, everything else goes through `String(key)`. That is broader than the `symbol`-only rule ADR 0015 §3 first enumerated, amended in place after a `v.map(v.bigint(), …)` failure made `JSON.stringify` on the `Result` **throw** and an object key was retained by identity.
+5. **`includeCause` is off by default, and the default was the decision** ([ADR 0015](../adr/0015-standard-schema-issue-mapping.md) §5). Always-on was the first recommendation, rejected on a measured cost: Zod puts the failing input in its issues, so every validation error would retain the rejected payload — PII and memory both — inside a value people log by reflex. It does not change the return type; `cause` is already optional on `TypedError`.
+6. **A schema that throws or rejects propagates.** A crash is not a validation failure, and laundering it into `validation_failed` would claim an issue list that does not exist. This is the one place the family's usual rejection-catching does not apply, which is why there is no `onReject` in the options bag; wrap in `fromThrowable` if an untrusted schema needs containing.
+
+**`fromSchemaAsync` accepts synchronous schemas; `fromSchema` does not accept asynchronous ones** — it throws a `TypeError` naming `fromSchemaAsync`. The asymmetry is deliberate rather than an oversight: this direction costs a microtask, while the other cannot be served at all. When it is not statically known which kind of schema arrives, `fromSchemaAsync` is the one to reach for. Before throwing, `fromSchema` **defuses the promise it abandons**, or a rejecting async schema raises an unhandled rejection a tick later and kills the process the caller had already recovered in.
+
+Both halves take §10.11's **settled-first** ordering — `Result`-shaped before thenable — and `fromSchemaAsync` needs it as much as the sync half. A bare `await` looks like it makes the question moot and does the opposite: §2's union is brandless, so a settled failure may carry a `then`, and `await` hands the value to it. Measured, not argued — it returned `Ok` holding a leaked value where `fromSchema` correctly returned the `Err`, and a `then` that never called back hung forever.
+
+### 5.11 Envelope parsing (2)
+
+Source: **none — this group has no ADR**, shipped in [#66](https://github.com/alifaroo-q/result-kit/issues/66). Recorded rather than left blank: it is additive surface that reverses no prior decision, so §10's escalation bar was not met, and this section is therefore the only normative statement of it.
+
+This is the **safe landing half of §2.1's round trip**: §2 makes the union structural so a `Result` can *leave*, and nothing covered the way back in, so every wire-crossing consumer wrote `as Result<T, E>` — an assertion the round-trip guarantee implicitly encourages and the type system cannot check.
+
+```ts
+export type MalformedResultReason =
+  | 'not_an_object'          // a primitive, `null`, or an array
+  | 'unreadable'             // own properties could not be read — a hostile `Proxy`
+  | 'missing_discriminant'   // no `ok` property at all
+  | 'invalid_discriminant'   // an `ok` that is not a boolean
+  | 'error_dropped';         // `ok: false` with no `error` key
+
+export type MalformedResult = TypedError<
+  'malformed_result',
+  { readonly reason: MalformedResultReason }
+>;
+
+export function isResult(value: unknown): value is Result<unknown, unknown>;
+
+export function parseResult(
+  value: unknown,
+): Result<Result<unknown, unknown>, MalformedResult>;
+```
+
+**The nesting in `parseResult` is the honest shape**, not an accident: the outer `Result` answers *was this a `Result` at all*, the inner one *did the operation succeed*. Collapsing them makes a malformed envelope indistinguishable from a reported failure, which is the distinction the function exists to draw.
+
+Six constraints:
+
+1. **Neither is generic, and `parseResult<T, E>` must not compile.** It would reinstate the `as Result<T, E>` cast this module exists to delete — the same lie behind a friendlier face. This module can prove the *envelope* and nothing about what it carries; narrowing the halves is the caller's job, or §5.10's. A type-level assertion pins it.
+2. **Both run one shared classifier**, so `isResult` and `parseResult` cannot disagree about what a `Result` is. That sharing is the whole argument for shipping a pair rather than either alone.
+3. **The discriminant probe is `propertyIsEnumerable`** — not `in`, not `Object.hasOwn`. That is exactly the set `JSON.stringify` writes. The first spelling (`'ok' in value`) called an object *inheriting* `ok` well-formed while it serialized to `{}`; a guard for wire re-entry that disagrees with the wire is worse than none. Caught by its own test, not by review, and §3.5 reached past `in` for the neighbouring reason.
+4. **A bare `{ ok: true }` is accepted and a bare `{ ok: false }` is rejected**, and the asymmetry is this spec's rather than taste. Both lose an `undefined` payload to `JSON.stringify` and TypeScript rejects both, but §10.9 carves out `Ok<void>` **because §5.1 recommends the constructor that produces it**, while `err` has no no-arg overload — so a bare `{ ok: false }` only ever means a non-serializable error went onto the wire. Measured: admitting it crashes `matchType`, `groupByType` and `prettifyErrors` one hop later, all three reading `type` off `undefined`. There is no value-side equivalent, because nothing in the package consumes `.value` structurally.
+5. **Extra properties pass, and are never stripped.** §2's exactly-two-fields rule binds what this package *builds*, not what it will *look at* — a gateway that stamped a `traceId` on the envelope has not made it stop being a `Result`. On success the input is returned **as-is**: same object, extras and all. This validates; it never normalizes or reconstructs.
+6. **The classifier cannot throw.** Every probe can, against a hostile or revoked `Proxy` — which makes even `Array.isArray` throw — so the whole walk sits inside one handler answering `'unreadable'`. Avoided here rather than found later; the internal diagnostic renderer §5.12 relies on had the same shape found the hard way, three times.
+
+**The rejected value is not in `details`.** Unlike §5.10's issues, which are produced inside the adapter and are otherwise unreachable, the caller of `parseResult` is holding the input already — putting it in `details` buys nothing and routes arbitrary wire data into the field §2.1 promises is JSON-safe. That is also why there is no `includeCause` here. `MalformedResultReason` is exported because it surfaces in hover and `.d.ts` output whether exported or not, and a symbol a user can see but cannot import is strictly worse (§10.2).
+
+### 5.12 Assertions (2)
+
+Source: [ADR 0011](../adr/0011-testing-subpath-matchers.md) (Option B), shipped ahead of the `/testing` matchers that later delegate to them.
+
+```ts
+export function expectOk<T, E>(result: Result<T, E>): T;
+export function expectErr<T, E>(result: Result<T, E>): E;
+```
+
+Test-facing narrowing terminals: return the expected half, throw a descriptive `Error` on the other. They are at the **root, not `/testing`** — they are dependency-free and ADR 0011's Option B ships them where the core is, while the `./testing` subpath carries only the Vitest matchers, which have an optional peer. That subpath has **no section in this document** — §6 covers `/fluent` alone, and `./testing` is described only in §7.1's amendment note. It is the same gap [#96](https://github.com/alifaroo-q/result-kit/issues/96) closed for the root groups, one entrypoint over, and is deliberately left open here: #96 scoped itself to the root barrel.
+
+Three constraints:
+
+1. **They are the throwing counterpart to §5.3's terminals, not a competitor to them.** `unwrapOrThrow` is production surface and throws the error it holds; these are test surface and throw a *diagnostic about the branch*. The difference is the audience, and it is why both exist.
+2. **The payload renders through an internal diagnostic renderer, never `JSON.stringify`.** This message is thrown at the moment a caller is already confused, and a raw `TypeError: Converting circular structure to JSON` in its place answers a question nobody asked. A `TypedError` — or the array of them `combineWithAllErrors` produces — reads in §3.4's `✖ type: message` *form*, with `details` and `cause` beneath, so the failure is diagnosable from test output alone. **A message may therefore be multi-line**; consumers must not flatten it. The renderer itself is **not §3.4 surface** and this spec does not specify it: §3.4 specifies `groupByType` and `prettifyErrors`, and its constraint 4 — *"`prettifyErrors` never reads `details`"* — still holds, being a statement about that one-liner. This is not a one-liner, and `details` is exactly the field a reader would otherwise go and log by hand.
+3. **The rendering rule is symmetric.** `expectErr` prettifies an `Ok` carrying a typed error shape too. That is unusual but not wrong, and one rule holding on both branches beats two rules differing by which half you are on.
+
+The `/testing` matchers delegate **every** wrong-branch message here, which is what let that renderer's prettified output reach them with no edit under `src/testing/`. Unlike these functions, a matcher does **not** narrow and cannot — a Vitest matcher says nothing about its subject's type — so `expectOk` remains the way to read `.value`.
 
 ## 6. `/fluent` entrypoint — `@zireal/result-kit/fluent`
 
@@ -1290,6 +1399,9 @@ Two smaller calls, both recorded so they are not re-litigated:
 | §5.6 async constructors | ADR 0005 §3 | — |
 | §5.7 do-notation | ADR 0007 + prototype [#23](https://github.com/alifaroo-q/result-kit/issues/23) | yield typing resolved in §5.7's note; `safeUnwrap` name → ADR 0007 §5 |
 | §5.8 public types | ADR 0004 §1, ADR 0002 §4 | publicness → §10.2 |
+| §5.10 schema adapters | ADR 0015 + [#61](https://github.com/alifaroo-q/result-kit/issues/61) | `StandardSchemaV1` vendored, not barrel-exported; key coercion amends ADR 0015 §3 |
+| §5.11 envelope parsing | [#66](https://github.com/alifaroo-q/result-kit/issues/66) — no ADR | additive; the `{ ok: true }` / `{ ok: false }` asymmetry follows §10.9 |
+| §5.12 assertions | ADR 0011 (Option B) | root, not `./testing`; the matchers in `src/testing/` delegate here — that subpath has no section |
 | **§6.1 `ResultChain`** | ADR 0004 §2, ADR 0007 §2 | **name → §10.1** |
 | **§6.2 `ResultAsync`** | ADR 0005 §4–5 + **ADR 0009** | placement/safety from 0005; **member list from 0009** |
 | §6.3 `/fluent` exports | ADR 0001 §4, ADR 0005 §4, ADR 0007 §3 | `safeUnwrap` stays out — ADR 0009 §5; **async constructors in — §10.5** |
