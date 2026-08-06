@@ -153,7 +153,7 @@ type BillingError = ErrorsOf<typeof billingErrors>;
 ```
 
 1. **`defineErrors` is a constrained identity.** It returns the registry unchanged; the only work it does is at the type level. The `ErrorRegistry` bound rejects a non-constructor entry *at the registration site* rather than letting it fold silently into `never` inside `ErrorsOf`. The `const` type parameter keeps the key set and each entry's `ErrorCtor` precise.
-2. **`ErrorsOf` is constructor-based, never tag-based.** It maps over the registry's *values* and infers each constructor's **return type**, so every variant keeps its own typed payload. This is the mechanism §3.1 already mandates ("error unions are built from constructor return types, each with its own payload"), packaged as a helper — it is **not** the cut `TypedErrorUnion` (§3.3, §10.15), which keyed off tags and rebuilt variants with the default payload.
+2. **`ErrorsOf` is constructor-based, never tag-based.** It maps over the registry's *values* and infers each constructor's **return type**, so every variant keeps its own typed payload. This is the mechanism §3.1 already mandates ("error unions are built from constructor return types, each with its own payload"), packaged as a helper — it is **not** the cut `TypedErrorUnion` (§3.3, §10.14), which keyed off tags and rebuilt variants with the default payload.
 3. **The registry constraint is structural, not `ErrorCtor<string, unknown>`.** `ErrorCtor`'s call signature is conditional on `[TData] extends [void]`, so no single instantiation is a supertype of both the payload and no-payload forms; the structural `(...args: never[]) => TypedError` lower bound admits every real constructor — and a hand-rolled factory too, since the helpers standardize the shape, not the origin.
 4. **`ErrorsOf` also accepts a plain object literal** with no wrapping call, and its `: never` fallback lets it degrade over an `import * as errors` module (non-constructor exports vanish rather than erroring). `defineErrors` is the stricter door for when you want the registration-time check.
 
@@ -674,7 +674,7 @@ export function expectOk<T, E>(result: Result<T, E>): T;
 export function expectErr<T, E>(result: Result<T, E>): E;
 ```
 
-Test-facing narrowing terminals: return the expected half, throw a descriptive `Error` on the other. They are at the **root, not `/testing`** — they are dependency-free and ADR 0011's Option B ships them where the core is, while the `./testing` subpath carries only the Vitest matchers, which have an optional peer. That subpath has **no section in this document** — §6 covers `/fluent` alone, and `./testing` is described only in §7.1's amendment note. It is the same gap [#96](https://github.com/alifaroo-q/result-kit/issues/96) closed for the root groups, one entrypoint over, and is deliberately left open here: #96 scoped itself to the root barrel.
+Test-facing narrowing terminals: return the expected half, throw a descriptive `Error` on the other. They are at the **root, not `/testing`** — they are dependency-free and ADR 0011's Option B ships them where the core is, while the `./testing` subpath (§6.4) carries only the Vitest matchers, which have an optional peer.
 
 Three constraints:
 
@@ -684,9 +684,13 @@ Three constraints:
 
 The `/testing` matchers delegate **every** wrong-branch message here, which is what let that renderer's prettified output reach them with no edit under `src/testing/`. Unlike these functions, a matcher does **not** narrow and cannot — a Vitest matcher says nothing about its subject's type — so `expectOk` remains the way to read `.value`.
 
-## 6. `/fluent` entrypoint — `@zireal/result-kit/fluent`
+## 6. Opt-in entrypoints — `/fluent` and `/testing`
 
-The wrapper mirrors only functions operating on a **single `Result` instance**, delegating one-to-one to the core. Array- and entry-shaped functions (`combine`, `partition`, `from*`, `isTypedError`) stay **free-function-only** — re-enter fluent-land with `from(...)`.
+> **Retitled 2026-08-06** ([#96](https://github.com/alifaroo-q/result-kit/issues/96)). This section read "`/fluent` entrypoint" and covered that subpath alone, while `./testing` — shipped in [#63](https://github.com/alifaroo-q/result-kit/issues/63) — had no section anywhere, appearing only in §7.1's amendment note about the entrypoint count. That is the gap #96 closed for the root groups, one entrypoint over, and §6.4 closes it here. **The number did not change and no subsection was renumbered**, for the reason given under §5.9: §6, §6.1–§6.3 and §7.x are cited from append-only ADRs, so a renumber would silently redirect them. Only the title widened.
+
+§6.1–§6.3 specify `/fluent`; §6.4 specifies `/testing`. Both are opt-in: the root entrypoint is self-sufficient (§4), and a consumer who imports neither ships neither.
+
+**`/fluent` — `@zireal/result-kit/fluent`.** The wrapper mirrors only functions operating on a **single `Result` instance**, delegating one-to-one to the core. Array- and entry-shaped functions (`combine`, `partition`, `from*`, `isTypedError`) stay **free-function-only** — re-enter fluent-land with `from(...)`.
 
 ### 6.1 `ResultChain<T, E>` — the sync wrapper
 
@@ -824,6 +828,49 @@ export function fromThrowableAsync<Args extends unknown[], T, E>(
 - **`fromPromise` ≠ `ResultAsync.from`.** `ResultAsync.from` lifts a `Promise<Result<T, E>>` that is *already* a union; `fromPromise` catches a rejection off a raw `Promise<T>` into the `E` channel. Neither substitutes for the other, which is why omitting `fromPromise` here would have left a `/fluent` user no rejection-catching entry into the wrapper without importing from root — breaking core/wrapper symmetry in the opposite direction to the one §4 guards.
 - **`ResultChain` is exported as a type; instances come from `ok`/`err`/`from`/`safeTry`.** `ResultAsync` is exported as a **value** (class) because [ADR 0005 §4](../adr/0005-v2-async-strategy.md) specifies the static `ResultAsync.from(promiseOfResult)`. The asymmetry — free `from` for sync, static `ResultAsync.from` for async — is as-decided; do not "fix" it without a new decision.
 
+### 6.4 `/testing` — `@zireal/result-kit/testing`
+
+Source: [ADR 0011](../adr/0011-testing-subpath-matchers.md) **Option A**, deferred there and unblocked by [ADR 0014 §1](../adr/0014-peer-dependency-policy-and-lint-package-layout.md); shipped in [#63](https://github.com/alifaroo-q/result-kit/issues/63). Four Vitest matchers over a `Result`. §5.12's `expectOk` / `expectErr` are Option B of the same ADR and stayed at the root; these are the half that needed a peer.
+
+```ts
+export const resultMatchers: {
+  toBeOk(): void;                        // the subject is an Ok, whatever it carries
+  toBeOkWith(expected: unknown): void;   // an Ok whose `value` deep-equals `expected`
+  toBeErr(): void;
+  toBeErrWith(expected: unknown): void;
+};
+
+// ambient — merges into vitest's own `Matchers<T>`; rides along with any import
+// from this module, so no `/// <reference>` is needed.
+declare module 'vitest' {
+  interface Matchers<T = any> {
+    toBeOk(): void;
+    toBeOkWith(expected: unknown): void;
+    toBeErr(): void;
+    toBeErrWith(expected: unknown): void;
+  }
+}
+```
+
+```ts
+// vitest.setup.ts
+import { expect } from 'vitest';
+import { resultMatchers } from '@zireal/result-kit/testing';
+
+expect.extend(resultMatchers);
+```
+
+Six constraints, four of them enforced by `test/testing/boundary.spec.ts` rather than by review:
+
+1. **`vitest` is imported in type position only.** That is what makes the peer optional *in fact*: `peerDependenciesMeta.optional` is a claim about installation, while the shipped chunk's import list is a claim about **resolution**. The guard asserts the built `dist/testing/` chunk contains **no bare specifier at all**. §7.2's "zero-dependency, zero-peerDependency" bullet is not violated — [ADR 0014 §0](../adr/0014-peer-dependency-policy-and-lint-package-layout.md) resolves that the promise is about the core artifact's install footprint, and an optional peer is never installed.
+2. **Registration is explicit, never a side effect of importing.** §7.2 declares `sideEffects: false`, so an auto-registering module is a bundler-droppable import — and the failure mode is a matcher that silently is not there.
+3. **The matchers do not narrow, and cannot.** A Vitest matcher's return type says nothing about its subject, so `expect(r).toBeOk()` leaves `r` a `Result<T, E>`. Reading `.value` still needs §5.12's `expectOk`. That is the division of labour rather than a gap: these **assert**, §5.12 **extracts**.
+4. **Every wrong-branch message is delegated to §5.12**, never authored here — one wording to maintain. It paid off exactly as intended: when the diagnostic renderer gained prettified `TypedError` output, the matchers inherited it with **no edit** under `src/testing/`, only a test asserting they did. A delegated message may therefore be **multi-line**, and must not be flattened.
+5. **A non-`Result` subject throws; it does not return `pass: false`.** "This is not a `Result`" is a usage error, not an assertion outcome, and the distinction is load-bearing under `.not` — a `pass: false` would make `expect(42).not.toBeOk()` *succeed*, reporting green about a subject the matcher never understood. A throw fails in both directions. That subject renders through the plain payload renderer rather than the diagnostic one, because the string is a *sentence* about something that is by definition not a `Result`.
+6. **The payload matchers are deep equality, not subset matching, and symmetric.** One semantic to remember rather than two. Partial matching is Vitest's own job — asymmetric matchers resolve through `this.equals`, so `toBeErrWith(expect.objectContaining({ type: 'not_found' }))` works without a third semantic. Their `Result`-ness check asks only for a boolean `ok`, per §2's brandless union — and so admits two subjects a stricter guard would reject. One has **no `value` key**, because `ok()` round-trips to `{ ok: true }` and §2.1 promises that is still usable. The other is **callable**: a function carrying `ok: true` is structurally an `Ok` and tsc assigns it, so a guard rejecting it would be narrower than the type it gates — the same widening §10.9 applied to `isTypedError` after the `typeof x !== 'object'` form silently rejected a valid callable.
+
+**The subpath ships no way to write `Result` code** — matchers only. That is why §7.1's "exactly three entrypoints" could grow a fourth without reopening its own rule: what that clause defends is the ban on deep-path hacks and on *category* subpaths carving the core API into `/transforms` and friends, and this is neither.
+
 ## 7. Packaging
 
 Source: [ADR 0006](../adr/0006-v2-package-layout-entrypoints.md).
@@ -833,7 +880,7 @@ Source: [ADR 0006](../adr/0006-v2-package-layout-entrypoints.md).
 - **ESM-only.** No CJS output, no `.cjs`, no split type files. A CJS consumer reaches 5.0.0 via `require(esm)` (guaranteed by the Node floor) or dynamic `import()`. Consequence: a **single `.d.ts` per entry**, and the "masquerading types" dual-package hazard **cannot occur**.
 - **Exactly three entrypoints:** `.` (flat, self-tree-shakable barrel — all 37 functions + the 13 public types) · `./fluent` · `./package.json`. The v1 `./core`, `./fp-ts`, `./nest` are **all removed**. No `/esm` deep-path hack. No category subpaths.
 
-  > **Amended by [ADR 0014 §1](../adr/0014-peer-dependency-policy-and-lint-package-layout.md), shipped in [#63](https://github.com/alifaroo-q/result-kit/issues/63) (2026-08-05): there is now a fourth, `./testing`.** Recorded rather than silently edited, because the count was load-bearing prose and a reader who remembers "exactly three" should find out why it changed.
+  > **Amended by [ADR 0014 §1](../adr/0014-peer-dependency-policy-and-lint-package-layout.md), shipped in [#63](https://github.com/alifaroo-q/result-kit/issues/63) (2026-08-05): there is now a fourth, `./testing`.** Recorded rather than silently edited, because the count was load-bearing prose and a reader who remembers "exactly three" should find out why it changed. It is specified in **§6.4** as of [#96](https://github.com/alifaroo-q/result-kit/issues/96); until then this note was the only place in the document it appeared at all.
   >
   > What the clause was defending is **not** the number — it is the two rules right after it: no deep-path hack, and no *category* subpaths carving the core API into `/transforms`, `/terminals`, and friends. Both still hold. `./testing` is neither: it is test-only sugar that ships **no** way to write `Result` code, in the same "pay for what you import" shape as `./fluent` (ADR 0001), and it is why ADR 0011's deferred Option A could land additively at all.
   >
@@ -1401,7 +1448,8 @@ Two smaller calls, both recorded so they are not re-litigated:
 | §5.8 public types | ADR 0004 §1, ADR 0002 §4 | publicness → §10.2 |
 | §5.10 schema adapters | ADR 0015 + [#61](https://github.com/alifaroo-q/result-kit/issues/61) | `StandardSchemaV1` vendored, not barrel-exported; key coercion amends ADR 0015 §3 |
 | §5.11 envelope parsing | [#66](https://github.com/alifaroo-q/result-kit/issues/66) — no ADR | additive; the `{ ok: true }` / `{ ok: false }` asymmetry follows §10.9 |
-| §5.12 assertions | ADR 0011 (Option B) | root, not `./testing`; the matchers in `src/testing/` delegate here — that subpath has no section |
+| §5.12 assertions | ADR 0011 (Option B) | root, not `./testing`; §6.4's matchers delegate here |
+| §6.4 `/testing` matchers | ADR 0011 (Option A) + **ADR 0014 §1** | deferred in 0011, unblocked by 0014; optional peer → §7.2, guarded on the artifact → §7.3 |
 | **§6.1 `ResultChain`** | ADR 0004 §2, ADR 0007 §2 | **name → §10.1** |
 | **§6.2 `ResultAsync`** | ADR 0005 §4–5 + **ADR 0009** | placement/safety from 0005; **member list from 0009** |
 | §6.3 `/fluent` exports | ADR 0001 §4, ADR 0005 §4, ADR 0007 §3 | `safeUnwrap` stays out — ADR 0009 §5; **async constructors in — §10.5** |
