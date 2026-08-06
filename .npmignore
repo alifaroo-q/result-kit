@@ -10,3 +10,15 @@
 # README/LICENSE/package.json; these need an explicit allow.
 !MIGRATION.md
 !RECIPES.md
+
+# The agent adoption kit (#65). These ship in the tarball on purpose: a coding
+# agent working in a consumer's repo sees `node_modules/@zireal/result-kit/`,
+# not this repo, so a kit reachable only from GitHub is a kit that never loads.
+# `llms-full.txt` is the one that earns the slot — it is self-contained, so it
+# works with no network. The skill ships beside it so installing is a copy, not
+# a fetch.
+!llms.txt
+!llms-full.txt
+!skills/
+!skills/**/
+!skills/**/*.md

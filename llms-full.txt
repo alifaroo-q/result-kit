@@ -1,0 +1,1187 @@
+# @zireal/result-kit — full agent reference
+
+> Type-safe `Result` handling for TypeScript. A plain, method-less `Result` union,
+> a data-first free-function core, and an opt-in fluent wrapper. Zero runtime
+> dependencies and no *required* peer dependencies (`vitest` is an **optional**
+> peer, used only by the `/testing` subpath). ESM-only, Node >=22.12,
+> TypeScript >=6.0. Current version: 5.x.
+
+This is the long form of `llms.txt`. It is self-contained: everything an agent
+needs to write, review, or migrate `@zireal/result-kit` code, including the
+rationale behind the decisions that look surprising. Read `llms.txt` alone if you
+only need to write correct code; read this when you need to know *why*, or when
+you are doing something beyond the common path.
+
+Contents:
+
+1. Reflexes to unlearn (read first if you know neverthrow)
+2. The union, and why it is plain data
+3. Root API — the complete surface
+4. Typed errors
+5. Dispatching on the error — `matchType`
+6. The two surfaces — core vs `/fluent`
+7. Async
+8. Do-notation — `safeTry`
+9. Across the wire
+10. Validation — `fromSchema`
+11. Testing
+12. Recipes
+13. Gotchas, in full
+14. Migrating from 1.x
+15. Vocabulary
+
+---
+
+## 1. Reflexes to unlearn
+
+An LLM writing for this package from prior training will produce `neverthrow`
+idioms. They are close enough to look right and different enough not to compile.
+Left column is the reflex; right column is what this package actually exports.
+
+| Common reflex | Correct here | Why |
+|---|---|---|
+| `result.unwrapOr(0)` | `unwrapOr(result, 0)` | The core is **free functions**. Methods exist only on `/fluent` wrappers. |
+| `result.map(f)` | `map(result, f)` | Data-first: the value is the first argument. |
+| `result.andThen(f)` | `andThen(result, f)` | Same. |
+| `result.match(okFn, errFn)` | `match(result, { ok, err })` | Ours takes **one object**, not two positional callbacks. This is the single most common miscompile. |
+| `Result.combine([a, b])` | `combine([a, b])` | No static namespace object. And ours is **tuple-preserving**. |
+| `Result.combineWithAllErrors([…])` | `combineWithAllErrors([…])` | Free function. |
+| `result._unsafeUnwrap()` | `unwrapOrThrow(result)` | `_unsafeUnwrap` does not exist. `unwrapOrThrow` throws a real `Error` with the original in `cause`. |
+| `result._unsafeUnwrapErr()` | `expectErr(result)` (tests only) | No production equivalent by design — narrow with `isErr`. |
+| `okAsync(v)` / `errAsync(e)` | *(no equivalent)* | Async is `Promise<Result>` in the core, or `ResultAsync.from(...)` on `/fluent`. |
+| `ResultAsync.fromPromise(p, fn)` | `fromPromise(p, fn)` | A free function, at the root **and** on `/fluent`. |
+| `ResultAsync.fromSafePromise(p)` | *(no equivalent)* | Use `fromPromise` and supply the reject mapper. |
+| `result.asyncMap(f)` | `.toAsync().map(f)` | Crossing sync→async is one explicit seam, not per-method twins. |
+| `result.asyncAndThen(f)` | `.toAsync().andThen(f)` | Same. |
+| `Result.fromThrowable(fn, onErr)` | `fromThrowable(fn, onErr)` | Free function. |
+| `fromAsyncThrowable(fn, onErr)` | `fromThrowableAsync(fn, onErr)` | The `Async` suffix goes **last**, consistently. |
+| `yield* mightFail()` (neverthrow 8.1+) | `yield* safeUnwrap(mightFail())` | **The dangerous one.** neverthrow's `Result` became directly iterable in 8.1.0; ours is deliberately **not**, so this looks like it should work. `safeUnwrap` is a free function, root-only. |
+| `yield* mightFail().safeUnwrap()` (≤8.0) | `yield* safeUnwrap(mightFail())` | Same target. Still present in neverthrow 8.x — deprecated in 8.1.1, slated for removal in 9.0.0. |
+| `err._tag` / `err.code` / `err.kind` | `err.type` | The discriminant is `type`. Always. |
+| `Data.TaggedError` / `class E extends Error` | `defineError('not_found', …)` | Typed errors are **plain objects**, never classes. |
+| `Option` / `Maybe` / `Some` / `None` | *(not shipped)* | Deliberately out of scope. Use `toNullable` / `fromNullable`. |
+| `E.right(v)` / `E.left(e)` (fp-ts) | `ok(v)` / `err(e)` | |
+| `pipe(x, E.map(f))` | `map(x, f)` or `/fluent` | No `pipe` ships. See §12. |
+| `import from '@zireal/result-kit/core'` | `from '@zireal/result-kit'` | There is no `/core` subpath. The root **is** the core. |
+
+### The one that bites hardest
+
+**`neverthrow`'s `.isOk()` narrows. `/fluent`'s `.isOk()` does not.**
+
+```ts
+// ✗ WRONG — does not narrow, and `.value` does not exist on the wrapper
+const chain = from(findUser(id));
+if (chain.isOk()) chain.value;
+
+// ✓ Leave the wrapper, then narrow with the free-function guard
+const result = from(findUser(id)).toResult();
+if (isOk(result)) result.value;   // T
+
+// ✓ Or never leave — collapse both branches instead
+from(findUser(id)).match({ ok: (u) => u.name, err: () => 'anonymous' });
+```
+
+`/fluent`'s `.isOk()` / `.isErr()` return **plain booleans** and buy no narrowing:
+a method cannot emit a type predicate about its own class's generics. The root's
+`isOk(r)` / `isErr(r)` *are* type predicates and do narrow.
+
+`ResultAsync` does not have `.isOk()` / `.isErr()` **at all** — an always-truthy
+`if (ra.isOk())` on a promise-like is a footgun, and narrowing needs the plain
+union anyway.
+
+---
+
+## 2. The union, and why it is plain data
+
+```ts
+type Result<T, E> = Ok<T> | Err<E>;
+
+interface Ok<T>  { readonly ok: true;  readonly value: T }
+interface Err<E> { readonly ok: false; readonly error: E }
+```
+
+**Purely structural — there is no brand.** Any `{ ok: true, value }` *is* an
+`Ok<T>`, whoever built it. Any `{ ok: false, error }` *is* an `Err<E>`.
+
+The contract, in full:
+
+- No class, no methods, no hidden brand, no `Symbol` tag.
+- **Exactly two fields** per half. No opposite-field `never`, no third field.
+- Shallow `readonly` only. No runtime `Object.freeze`.
+- Not iterable. (Iterability lives on `safeUnwrap` and the `/fluent` wrappers.)
+
+Each of those is load-bearing for one guarantee: a `Result` round-trips through
+`JSON.parse(JSON.stringify(...))` when `T` and `E` are JSON-serializable, and
+arrives on the far side **still a usable `Result`** — no re-wrapping, no revival
+step, no `instanceof` to fail.
+
+```ts
+const parsed = JSON.parse(JSON.stringify(result)); // still a usable Result
+```
+
+That is the difference from every class-based library in the genre. A thrown
+`Error` does not serialize (`JSON.stringify(new Error('x'))` is `{}`), and a
+`Result` that is a class instance does not either — the methods are gone,
+`instanceof` is false, and what arrives is a bag of fields wearing the wrong type.
+
+**Three carve-outs**, and they are the only three:
+
+1. **`cause` may hold anything.** It is the one field typed `unknown`, so it is
+   the one route a non-serializable value takes in. Strip it at the boundary.
+2. **Exit the wrapper first.** Serialize `chain.toResult()`, never the chain.
+3. **`ok()` with no argument** round-trips to a one-field object — see §13.
+
+Practical consequences when writing code:
+
+- There is no `instanceof Result`. Use `isOk` / `isErr` / `isResult`.
+- Do not add a `status`, a `timestamp`, or any third field to a `Result`.
+- Do not add a top-level field to a `TypedError` either — nest it under `details`.
+
+---
+
+## 3. Root API — the complete surface
+
+`@zireal/result-kit` exports **37 values and 13 types** from one flat barrel.
+Import only what you use; the package is `sideEffects: false` and genuinely
+tree-shakable — import three functions and ship three functions.
+
+### Constructors and guards
+
+```ts
+ok(value)              // Ok<T>
+ok()                   // Ok<void> — the no-arg overload, for Result<void, E>
+err(error)             // Err<E> — the single generic failure constructor
+isOk(r) / isErr(r)     // type predicates: `r is Ok<T>` / `r is Err<E>`
+isTypedError(e)        // does this value follow the TypedError convention?
+defineError(type, msg) // build a typed-error constructor
+defineErrors(registry) // group constructors so ErrorsOf can derive the union
+isResult(v)            // is this `unknown` a Result? (type predicate)
+parseResult(v)         // the same check, with a typed error saying why it failed
+```
+
+There is **no** separate typed `fail` constructor. `err` takes any `E`, including
+a `TypedError`.
+
+### Transforms
+
+Each accepts a `Result` **or** a `Promise<Result>` in the same signature — there
+is no `Async`-suffixed twin of any of them.
+
+```ts
+map(r, fn)             // transform the value; Err passes through untouched
+mapErr(r, fn)          // transform the error; Ok passes through untouched
+andThen(r, fn)         // chain a fallible step; error channel widens to E | F
+orElse(r, fn)          // recover from an error
+inspect(r, fn)         // tee the Ok side for a side effect; returns r unchanged
+inspectErr(r, fn)      // tee the Err side for a side effect
+```
+
+`andThen` **accumulates** the error channel — `Result<T, E>` plus a callback
+returning `Result<U, F>` gives `Result<U, E | F>`. That is the same rule
+do-notation uses. There is no Rust-style `From` coercion.
+
+### Terminals
+
+These leave the `Result` world.
+
+```ts
+match(r, { ok, err })  // collapse both branches to one value; exhaustive
+unwrapOr(r, fallback)  // the value, or a fallback
+unwrapOrElse(r, fn)    // the value, or a fallback computed from the error
+unwrapOrThrow(r, msg?) // the value, or THROW a real Error (original in `cause`)
+toNullable(r)          // the value, or null
+```
+
+`match`'s cases object is keyed `ok` / `err`. Both keys are required —
+exhaustiveness is structural, not checked by a helper.
+
+### Collections
+
+```ts
+combine(results)               // all-or-nothing; PRESERVES THE TUPLE TYPE; first Err wins
+combineWithAllErrors(results)  // same success typing, but collects EVERY error into an array
+partition(results)             // [values, errors] — both halves, always
+```
+
+```ts
+combine([ok(1), ok('a')]);   // Result<[number, string], never> — a tuple, not (number|string)[]
+```
+
+`combineWithAllErrors` is the motivating source for `groupByType` and
+`prettifyErrors`. `partition`'s second half is an equally valid input to both.
+
+### Error matching
+
+```ts
+matchType(error, arms)            // one arm per variant; a missing arm is a COMPILE ERROR
+matchType(error, arms, fallback)  // partial arms; fallback sees only the RESIDUAL variants
+```
+
+### Formatters
+
+Presentation over the `TypedError[]` that `combineWithAllErrors` accumulates.
+
+```ts
+groupByType(errors)    // -> a PARTIAL record keyed by `type`; groups keep their narrowed variant
+prettifyErrors(errors) // -> one "✖ <type>: <message>" line per error
+```
+
+`groupByType`'s keys are optional because a variant that did not occur has no key
+— typing an absent group as present would hand you `undefined` under a type that
+promised an array.
+
+`prettifyErrors` reads `type` and `message` **only**, never `details`. An empty
+input gives an empty string rather than a placeholder, so it composes into a
+larger message. It is **not** a redaction mechanism: a variant whose message is
+computed from its payload has already put that data in `message`.
+
+### Interop — the ways into the `Result` world
+
+```ts
+fromNullable(value, error)        // null/undefined becomes an Err
+fromPredicate(value, pred, error) // narrows T when pred is a type guard
+fromThrowable(fn, onThrow)        // wrap a throwing function into a Result-returning one
+fromPromise(promise, onReject)    // catch a REJECTION into the error channel
+fromThrowableAsync(fn, onReject)  // the lazy, reusable form of fromPromise
+fromSchema(schema, options?)      // any Standard Schema validator -> a Result-returning fn
+fromSchemaAsync(schema, options?) // the same, for asynchronous validation
+```
+
+### Do-notation
+
+```ts
+safeTry(function* () { … })       // drive a generator; any Err short-circuits the block
+safeUnwrap(r)                     // make a plain Result yield*-able. ROOT ONLY.
+```
+
+### Test assertions
+
+```ts
+expectOk(r)   // returns T — asserts the branch, then EXTRACTS the value
+expectErr(r)  // returns E — asserts the branch, then EXTRACTS the error
+```
+
+These live on the **root barrel** and need no test runner. They are not the
+`/testing` matchers — see §11 for the distinction.
+
+### Types
+
+`Result` `Ok` `Err` `TypedError` `ErrorCtor` `ErrorsOf` `OkTypeOf` `ErrTypeOf`
+`ValidationIssue` `ValidationFailed` `FromSchemaOptions` `MalformedResult`
+`MalformedResultReason`
+
+---
+
+## 4. Typed errors
+
+`E` is **fully generic**. A `Result`'s error may be a string, a real `Error`, or
+anything else. `TypedError` is an **opt-in** convention for errors you want to
+narrow on:
+
+```ts
+{ type: string; message: string; details?: TData; cause?: unknown }
+```
+
+Plain objects. **Never classes. Never `extends Error`.** They serialize, and they
+narrow.
+
+- **`type`** — the stable string discriminant you switch on. Not a Node-style
+  error `code`, and not `_tag`.
+- **`message`** — human-readable. Keep secrets out of it; no formatter can take
+  them back out.
+- **`details`** — the optional, variant-typed payload. Nested under one key,
+  **never spread onto the error object** — that would break the four-field shape.
+- **`cause`** — `unknown`. The one non-serializable route. Strip at boundaries.
+
+### Building them
+
+```ts
+import { defineError, defineErrors, err } from '@zireal/result-kit';
+import type { ErrorsOf } from '@zireal/result-kit';
+
+const notFound = defineError('not_found', (d: { id: string }) => `No user ${d.id}`);
+const forbidden = defineError('forbidden', 'Not permitted');
+
+// Manual union — always supported
+// type AppError = ReturnType<typeof notFound> | ReturnType<typeof forbidden>;
+
+// Registry form — one named home for the set. Pick ONE of these two; declaring
+// both in the same scope is a duplicate identifier.
+export const appErrors = defineErrors({ notFound, forbidden });
+export type AppError = ErrorsOf<typeof appErrors>;
+//          ^? TypedError<'not_found', { id: string }> | TypedError<'forbidden', never>
+
+const failure = err(notFound({ id: 'u1' }));
+//    ^? Err<TypedError<'not_found', { id: string }>>
+```
+
+`defineError`'s second argument is either a **string** (a fixed message) or a
+**function** of the payload (a computed one). The constructor decides which by
+counting the message function's declared parameters, which leaves exactly one
+shape it cannot infer — a payload paired with a **static** message. Getting that
+wrong fails *silently*:
+
+```ts
+// ✗ TYPECHECKS, then drops `details` at runtime. Nothing is declared for the
+//   constructor to read, so it builds a no-payload variant.
+defineError<'conflict', { id: string }>('conflict', 'Already exists');
+
+// ✓ The escape hatch — supplies the payload type without repeating the tag.
+defineError.withData<{ id: string }>()('conflict', 'Already exists');
+```
+
+Reach for `.withData` **only** for that case; the single-call form covers every
+computed message.
+
+`defineErrors` returns the object unchanged — its only job is to type-check the
+bag, so a non-constructor entry is caught where you write it rather than later.
+
+Each constructor also carries:
+
+- `.type` — the tag, readable without building a value.
+- `.is()` — a runtime guard for narrowing a union.
+
+### Narrowing them
+
+```ts
+switch (error.type) {
+  case 'not_found': return error.details?.id;
+  case 'forbidden': return null;
+}
+```
+
+`switch` works and narrows. `matchType` (§5) is the expression form, and adds
+compile-time exhaustiveness.
+
+---
+
+## 5. Dispatching on the error — `matchType`
+
+`switch (error.type)` narrows, but it is a *statement*, and it is not
+exhaustive-checked without a `never` helper in the default branch. `matchType` is
+the expression form, and exhaustiveness **is** the type:
+
+```ts
+import { matchType } from '@zireal/result-kit';
+
+const status = matchType(error, {
+  not_found: () => 404,
+  forbidden: () => 403,
+  conflict: (e) => (e.details!.slug ? 409 : 400),
+});
+//    ^? number — the union of every arm's return type
+```
+
+- Each arm receives its **own** narrowed variant, with its own payload.
+  `conflict`'s `e.details` is `{ slug: string } | undefined`; reaching for
+  `e.details!.id` there is an error.
+- A **missing** arm is a compile error.
+- An arm keyed on a tag the union does not have is **also** a compile error — a
+  typo'd tag cannot compile as a dead arm.
+- Add a variant to the union later and every `matchType` over it lights up.
+
+### The fallback is the third parameter
+
+```ts
+const status = matchType(error, { not_found: () => 404 }, (e) => {
+  //                                                       ^? forbidden | conflict
+  logUnexpected(e);
+  return 500;
+});
+```
+
+**Never a `_` key inside the arm bag.** Only the third position can be narrowed
+to the *residual* variants — the ones you did not handle. A `_` sharing the
+object collapses to `never` and would hand you back the variants you just
+handled. That residual narrowing is the entire reason to prefer `matchType` over
+`switch`.
+
+It is not a `default:` branch and does not see the whole union. Do not call it
+"the default arm".
+
+### Composing with `match`
+
+`matchType` operates on the **error**, not on the `Result`. The idiomatic pairing:
+
+```ts
+const status = match(result, {
+  ok: () => 200,
+  err: (e) => matchType(e, { not_found: () => 404, forbidden: () => 403 }),
+});
+```
+
+One leaves the `Result`; the other dispatches on the error inside it.
+
+### Two constraints
+
+- **`details` stays optional after the tag narrows.** Narrowing does not make the
+  payload non-optional. Arms read `e.details!.id` or `e.details?.id`. That is a
+  `TypedError` fact, not a `matchType` one.
+- **Only a closed union can be exhausted.** A bare `TypedError` has an open
+  `string` tag, so *any* set of arms satisfies it. Exhaustiveness needs a union of
+  specific variants — what `ErrorsOf` or `ReturnType<typeof …> | …` gives you.
+
+---
+
+## 6. The two surfaces
+
+Both are first-class and fully supported. Pick per project, or mix per file.
+
+| | `@zireal/result-kit/fluent` | `@zireal/result-kit` |
+|---|---|---|
+| Style | chained methods | free functions |
+| Reads like | `ok(x).map(f).unwrapOr(0)` | `unwrapOr(map(ok(x), f), 0)` |
+| Best for | application code, linear pipelines | libraries, hot paths, minimal bundles |
+| Bundle cost | the wrapper class | only the functions you import |
+
+**Default to `/fluent` for application code.** Reach for the core when bundle size
+matters, or when writing a library and you would rather not impose a wrapper on
+your callers.
+
+The core is **self-sufficient** — it never needs `/fluent`. That is the point of
+the split, and it is something a class-based library structurally cannot offer,
+because there the methods and the data are the same object.
+
+```ts
+// core — reads inside-out
+import { map, mapErr, unwrapOr } from '@zireal/result-kit';
+const named = map(findUser('u1'), (user) => user.name);
+const label = unwrapOr(mapErr(named, (e) => e.message), 'anonymous');
+
+// /fluent — reads left-to-right
+import { from } from '@zireal/result-kit/fluent';
+const label = from(findUser('u1'))
+  .map((user) => user.name)
+  .mapErr((e) => e.message)
+  .unwrapOr('anonymous');
+```
+
+### The wrapper is transient
+
+**The plain union is the source of truth.** A `ResultChain` is an ergonomic
+envelope for the duration of one chain — never the interchange type, never the
+stored type, never the serialized type.
+
+- `from(result)` lifts a plain `Result` in.
+- `.toResult()` takes you back out.
+- Only the plain union carries the JSON round-trip guarantee.
+
+`ResultChain` delegates one-to-one to the core free functions. It never
+reimplements them.
+
+### `/fluent`'s exports
+
+`ok` `err` `from` `safeTry` `fromPromise` `fromThrowableAsync` `ResultAsync`,
+plus the `ResultChain` type.
+
+`ok` / `err` / `safeTry` / `fromPromise` / `fromThrowableAsync` exist at **both**
+entrypoints under the same names — the root's return plain data, these return
+wrappers. Deliberate: you should not have to learn two vocabularies.
+
+**`ResultChain<T, E>` mirrors the core:** `.map()` `.mapErr()` `.andThen()`
+`.orElse()` `.inspect()` `.inspectErr()` `.match()` `.unwrapOr()`
+`.unwrapOrElse()` `.unwrapOrThrow()` `.toNullable()` `.isOk()` `.isErr()`
+`.toResult()` `.toAsync()`. It also carries `.toJSON()` (which serializes the
+wrapped `Result` — but exit with `.toResult()` rather than relying on it) and
+`[Symbol.iterator]`, which is what makes it `yield*`-able inside `safeTry`.
+
+### Array-shaped helpers stay root-only
+
+`combine`, `combineWithAllErrors`, `partition`, and the three sync constructors
+`fromNullable` / `fromPredicate` / `fromThrowable`. They take arrays or
+non-`Result` inputs, so there is no single instance for a method to hang off.
+Re-enter with `from(...)`:
+
+```ts
+from(combine([a, b])).map(sum).unwrapOr(0);
+```
+
+---
+
+## 7. Async
+
+### In the core
+
+Async is just `Promise<Result<T, E>>`. **There is no new type**, and no
+`Async`-suffixed twin of anything — the transforms take a value or a promise in
+the same signature:
+
+```ts
+const upper = await map(loadUser(id), (user) => user.name.toUpperCase());
+```
+
+### On `/fluent`
+
+```ts
+import { ResultAsync } from '@zireal/result-kit/fluent';
+
+const name = await ResultAsync.from(loadUser(id))
+  .andThen(requireActive)
+  .map((user) => user.name)
+  .match({ ok: (n) => n, err: () => 'anonymous' });
+```
+
+`ResultAsync` **is `ResultChain` lifted**: every value-terminal mirrored with a
+`Promise`-returning one. Terminal *handlers* stay synchronous; only the return is
+lifted.
+
+It `implements PromiseLike<Result<T, E>>`, so `await resultAsync` collapses to the
+plain `Result` — by design rather than by accident. Awaiting *is* the sanctioned
+way out. It also means a floating un-`await`ed chain is caught by the standard
+`no-floating-promises` lint rule, for free.
+
+**Two deliberate departures from `ResultChain`:**
+
+1. **No `.isOk()` / `.isErr()`.** An always-truthy `if (ra.isOk())` is a footgun,
+   and narrowing needs the plain union anyway.
+2. **`.toJSON()` throws**, rather than silently serializing `{}` for a value that
+   has not arrived yet.
+
+### Reaching async is always explicit
+
+Three ways in — `.toAsync()`, `fromPromise`, `ResultAsync.from` — and never
+implicitly:
+
+```ts
+import { ok } from '@zireal/result-kit/fluent';   // the WRAPPER ok, not the root's
+
+ok(user).map(validate).toAsync().andThen(saveRemote).match({
+  ok: (saved) => saved.id,
+  err: (e) => e.message,
+});
+```
+
+**Why explicit:** a settled `Result` cannot promise an asynchronous output. A
+transform may short-circuit *without calling its callback at all* — so on the
+`Err` branch there would be nothing to await.
+
+The precise consequence, which splits three ways rather than one:
+
+- On **`ResultAsync`**, `.map()` / `.mapErr()` / `.andThen()` / `.orElse()`
+  explicitly **do** accept promise-returning callbacks. You are already async.
+- On a **sync** chain, `.andThen()` / `.orElse()` **reject** an async callback
+  outright — their callback is typed `(value: T) => Result<U, F>`, so a
+  `Promise<Result>` matches no overload. That is a loud compile error, which is
+  the good case.
+- On a **sync** chain, `.map()` / `.mapErr()` / `.inspect()` / `.inspectErr()`
+  cannot reject it, because their callback returns an arbitrary `U`. So the
+  return is typed *honestly* instead: it widens to `ResultChain | ResultAsync`
+  (`Result | Promise<Result>` in the core), since which one you get depends on a
+  branch taken at runtime.
+
+Either way the fix is the same: reach for `.toAsync()` first, and the type stays
+a single thing.
+
+---
+
+## 8. Do-notation — `safeTry`
+
+For flows where chaining gets awkward: branches, early exits, or a step needing a
+value from two steps back. The body reads as flat, sequential code, and any `Err`
+short-circuits the whole block.
+
+```ts
+import { ok, safeTry, safeUnwrap } from '@zireal/result-kit';
+
+const total = safeTry(function* () {
+  const user = yield* safeUnwrap(findUser(id));      // an Err here short-circuits
+  const order = yield* safeUnwrap(loadOrder(user));  // each binds its own type
+
+  return ok(user.credit + order.total);              // return a Result EXPLICITLY
+});
+//    ^? Result<number, NotFound | OrderMissing>
+```
+
+The error channel is **union-accumulated** — the same rule `andThen` uses, because
+do-notation *is* `andThen` chaining with nicer syntax. There is no Rust-style
+`From` coercion.
+
+**Rules for the body:**
+
+1. **Return a `Result`, never a bare value.** `return ok(v)`, or an early
+   `return err(e)`.
+2. `safeUnwrap` is a **free function**, and it only ever appears inside a
+   `safeTry` block.
+
+### Async
+
+The same overloaded runner covers both worlds — a `function*` returns the sync
+shape, an `async function*` the async one. **There is no `safeTryAsync`.** Inside
+an `async function*`, a `Promise<Result>` unwraps with no `await`:
+
+```ts
+const total = await safeTry(async function* () {
+  const user = yield* safeUnwrap(fetchUser(id));
+
+  return ok(user.credit);
+});
+```
+
+### On `/fluent`
+
+There is **no `safeUnwrap`** — the wrappers are self-iterable, so `yield*` them
+directly, and the block hands back a wrapper so the chain continues:
+
+```ts
+import { ok, safeTry, from } from '@zireal/result-kit/fluent';
+
+const total = safeTry(function* () {
+  const user = yield* from(findUser(id));
+
+  return ok(user.credit);
+}).unwrapOr(0);
+```
+
+The root's `safeUnwrap` still works inside a fluent block, for unwrapping a
+*plain* union.
+
+**Why iterability lives on the adapter and not the union:** putting
+`[Symbol.iterator]` on what `ok()` / `err()` produce would reopen the no-brand
+guarantee, and with it the JSON round-trip, for the sake of optional sugar.
+`ok(1)` is not iterable, and that is enforced by test.
+
+---
+
+## 9. Across the wire
+
+Most error-handling libraries stop at the process boundary. This package's central
+claim is that it does not.
+
+A `Result` is plain data by contract, so it crosses intact and **stays a
+`Result`** on the other side. That turns the usual boundary ceremony — a status
+code, a bespoke `{ error: string }` envelope, a `try`/`catch` that flattens every
+failure to a message — into nothing at all: you return the value you already had.
+
+```ts
+// server
+return err(seatTaken({ seatId }));
+
+// client — the same union, narrowed
+if (isErr(result)) matchType(result.error, { seat_taken: …, flight_closed: … });
+```
+
+**End-to-end typed errors, server to client, with no codegen step.** No generated
+client, no schema-to-type pipeline, no drift: the client's types are the server's
+types because they are the same declarations.
+
+### One pattern, two transports
+
+The pattern is always *return a `Result`, narrow it on the far side*. What differs
+is whether the **type** made the trip with the value.
+
+**Transport 1 — the type crosses too** (a Next.js server action, a typed RPC
+client, tRPC, a typed worker channel). Nothing to do:
+
+```ts
+const result = await bookSeat(input);
+
+return isOk(result) ? `Booked ${result.value.seatId}` : explain(result.error);
+```
+
+Keep the framework-facing function **thin**. The action is a wrapper; the
+substance is an ordinary `Result`-returning function it calls:
+
+```ts
+'use server';
+
+export async function bookSeatAction(input: unknown) {
+  return createBooking(input);   // plain TypeScript, no framework in sight
+}
+```
+
+That is not tidiness. It is what keeps the pattern true on a route handler, a
+queue consumer and a test without rewriting it, and it keeps your error logic out
+of the one file the framework owns.
+
+> A server action's return type is a *compiler* promise, not a runtime check.
+> Across a version skew it can be wrong. `parseResult` is available there too if
+> you want the belt as well as the braces — it is simply not the common case.
+
+**Transport 2 — the type is lost** (`fetch`, `postMessage`, a message queue).
+`response.json()` hands you `unknown`, and closing that gap with
+`as Result<T, E>` is an assertion nothing verifies on data you did not author.
+Prove it back instead, in **two steps**:
+
+```ts
+const envelope = parseResult(await response.json());
+if (isErr(envelope)) return `Bad response (${envelope.error.details?.reason})`;
+
+const result = envelope.value;                 // Result<unknown, unknown> — envelope proven
+if (isErr(result)) return renderError(result.error);
+
+const booking = parseBooking(result.value);    // fromSchema — payload proven
+```
+
+`parseResult` proves the **envelope**; `fromSchema` proves the **payload**. They
+are separate steps on purpose: the envelope is provable and its cargo is not.
+
+### `parseResult` and `isResult`
+
+```ts
+const parsed = parseResult(await response.json());
+
+if (isErr(parsed)) {
+  console.error(parsed.error.details?.reason); // see the five reasons below
+  return;
+}
+
+const result = parsed.value;                  // Result<unknown, unknown>
+if (isOk(result)) result.value;
+```
+
+**The nesting is deliberate.** The outer `Result` answers *was this a `Result` at
+all*; the inner one *did the operation succeed*. Collapsing them would make a
+corrupt envelope indistinguishable from a reported failure — the exact
+distinction the function exists to draw.
+
+Reach for `isResult` instead when you just want an `if`: it is the same check as
+a type predicate, with no diagnostic and no nesting.
+
+`MalformedResultReason` is a **closed union of five**, and branching on it is the
+whole point of the type:
+
+| Reason | Meaning |
+|---|---|
+| `'not_an_object'` | A primitive, `null`, or an array. |
+| `'unreadable'` | An object whose own properties could not be read — a hostile `Proxy`. |
+| `'missing_discriminant'` | No `ok` property at all. |
+| `'invalid_discriminant'` | An `ok` property that is not a boolean. |
+| `'error_dropped'` | `ok: false` with no `error` key. |
+
+**`parseResult` is deliberately not generic.** `parseResult<User, E>(json)` would
+be the same unchecked assertion wearing a friendlier face — it proves the
+envelope and nothing about what it carries. Narrow the payload with `fromSchema`
+or your own guard. Writing the generic form does not compile.
+
+**It validates and never rewrites.** On success you get back *the same object*,
+extra properties and all — a `traceId` your gateway stamped onto the envelope
+rides through untouched. The two-field rule governs what this package *builds*,
+not what it will look at.
+
+Two rejections worth knowing, both about properties `JSON.stringify` drops:
+
+- A round-tripped `ok()` is `{ ok: true }` with no `value` key, and it is
+  **accepted** — it is the output of the form this package recommends for a void
+  success.
+- A bare `{ ok: false }` is **rejected**, reason `'error_dropped'`. `err` has no
+  no-arg form, so that shape only arises when a payload that is not
+  JSON-serializable was dropped in transit. Send `"error": null` for a failure
+  with no detail. Accepting it would hand you an `Err` whose `.error` is
+  `undefined`, which crashes `matchType`, `groupByType` and `prettifyErrors` one
+  hop later.
+
+### The three things that do not survive
+
+- **`cause` may hold anything.** The one field typed `unknown`, so the one route
+  a non-serializable value takes into an otherwise JSON-safe `Result`. This
+  collides head-on with `fromSchema`'s `{ includeCause: true }`, which puts the
+  **raw vendor issues** there — the rejected input included, so a cycle, a
+  `BigInt` or a user's password can ride out in the response body. Strip `cause`
+  at the boundary, in the one function that serializes. This package never
+  mutates your error data to do it for you.
+- **`ok()` with no argument.** Arrives as `{ ok: true }` with the `value` key
+  *gone*, not `undefined`. Reading `revived.value` on that object still gives
+  `undefined` and is usually fine; `'value' in revived` will surprise you. (This
+  is about the round-tripped object itself — not about `parseResult`'s envelope,
+  whose `.value` is the inner `Result` and is always present.)
+- **The fluent wrapper.** Exit it first — serialize `chain.toResult()`.
+
+---
+
+## 10. Validation — `fromSchema`
+
+Zod 4, Valibot, ArkType and Effect Schema all implement
+[Standard Schema v1](https://standardschema.dev), a **types-only** spec. So one
+adapter covers all of them, and the zero-dependency stance is untouched — there is
+no dependency to add.
+
+```ts
+import { fromSchema, isErr } from '@zireal/result-kit';
+
+const parseUser = fromSchema(UserSchema);   // one wrap, many calls
+
+const result = parseUser(await req.json()); // Result<User, ValidationFailed>
+if (isErr(result)) {
+  for (const { path, message } of result.error.details?.issues ?? []) {
+    console.log(path.join('.'), message);   // "email", "invalid email"
+  }
+}
+```
+
+Note `details?.issues` — `details` is optional on **every** `TypedError`, so the
+`?.` is required.
+
+The error is a **single** `TypedError<'validation_failed', { issues }>` — one
+error channel, one error — so it composes with `matchType`, `groupByType` and
+`combineWithAllErrors` like every other typed error. It is deliberately *not* an
+array of errors: a `TypedError[]` in `E` would make `matchType` / `isTypedError` /
+`unwrapOrThrow` special-case an array, and would collide with `combine`'s own
+`Result<T[], E[]>`.
+
+### What each issue keeps
+
+Only the two fields Standard Schema *guarantees*:
+
+- **`message`** — the vendor's own text, **passed through untouched**.
+- **`path`** — normalized to `readonly (string | number)[]`. `[]` means the root.
+
+Vendor extras — Zod's `code`, `expected`, `input` — are **dropped**. That keeps
+`details` identical across vendors and provably JSON-safe, which is what lets a
+validation error cross the wire under the round-trip guarantee.
+
+**The accepted price: you cannot branch on *what kind* of failure occurred** from
+`details`. Pass `{ includeCause: true }` to keep the raw issues on `cause` for
+debugging. It is **off by default** because Zod attaches the rejected input, and
+an always-on `cause` would retain that payload inside a value people log by
+reflex.
+
+Two things to know before logging an issue list:
+
+- `issue.message` is the **vendor's** text and some vendors embed the rejected
+  value in it — Valibot's reads `Invalid email: Received "..."`. The
+  `error.message` this package authors is a **count and nothing else**, precisely
+  so the one field it controls cannot carry payload. The per-issue messages are
+  not under that promise.
+- An empty `issues` array is still an `Err`.
+
+### Sync vs async
+
+`fromSchema` is synchronous and **throws** if handed an async schema — the spec's
+own type says any schema *may* be async, so it cannot be caught at compile time.
+`fromSchemaAsync` accepts both, and is the one to reach for when you do not know
+statically which you have.
+
+They are a **pair, not one union-returning function**: the spec types `validate`
+as `Result | Promise<Result>` unconditionally, so a conditional return type would
+never reduce and every caller would pay an `await` for synchronous validation.
+
+---
+
+## 11. Testing
+
+A `Result` is plain data — never a class, never `extends Error` — so you assert on
+it structurally, with no custom matcher and no fighting `instanceof`:
+
+```ts
+expect(await changePlan(input)).toEqual(ok({ kind: 'noop' }));
+expect(await changePlan(bad)).toEqual(err(missingBaseItem()));
+```
+
+### Reading the value — `expectOk` / `expectErr`
+
+On the **root barrel**. They need no test runner. They assert the branch, then **return** the payload —
+`expectOk` gives you `T`, `expectErr` gives you `E`:
+
+```ts
+import { expectOk, expectErr } from '@zireal/result-kit';
+
+const value = expectOk(await loadPlan(id));
+expect(value.items).toHaveLength(2);
+
+const error = expectErr(await failingCall());
+expect(error.type).toBe('not_found');
+```
+
+On the wrong branch they throw a descriptive error. A `TypedError` payload (or the
+`combineWithAllErrors` array of them) is rendered as a `✖ type: message` block
+with `details` and `cause` beneath, rather than one line of JSON.
+
+### Vitest matchers — `@zireal/result-kit/testing`
+
+An **optional** subpath. `vitest` is an optional peer dependency: never installed
+on your behalf, and nothing in your production bundle references it.
+
+**Register explicitly** — importing does *not* register them, because
+`sideEffects: false` would let a bundler drop an auto-registering import and leave
+the matchers silently absent:
+
+```ts
+// vitest.setup.ts
+import { expect } from 'vitest';
+import { resultMatchers } from '@zireal/result-kit/testing';
+
+expect.extend(resultMatchers);
+```
+
+Then:
+
+```ts
+expect(await loadPlan(id)).toBeOk();
+expect(await loadPlan(id)).toBeOkWith({ kind: 'noop' });
+
+expect(await loadPlan(bad)).toBeErr();
+expect(await loadPlan(bad)).toBeErrWith(missingBaseItem());
+
+// partial matching is vitest's own, not a separate matcher
+expect(await loadPlan(bad)).toBeErrWith(
+  expect.objectContaining({ type: 'missing_base_item' }),
+);
+```
+
+Four matchers, symmetric: `toBeOk` / `toBeOkWith` / `toBeErr` / `toBeErrWith`.
+Both `*With` forms are **deep equality**; partial matching is Vitest's own
+`expect.objectContaining`, which they honour. There is no `toBeErrMatching`.
+
+**The matchers assert; they do not narrow**, because a Vitest matcher cannot say
+anything about its subject's type. Keep `expectOk` / `expectErr` for reading the
+value afterwards. Every failure message is delegated to those two, so the wording
+is one thing with two call shapes.
+
+---
+
+## 12. Recipes
+
+### Adopting `Result` in a codebase that throws
+
+You do not have to convert everything at once. `unwrapOrThrow` is the **boundary
+adapter** for a strangler migration:
+
+```ts
+import { unwrapOrThrow } from '@zireal/result-kit';
+
+// Newly converted — returns a Result.
+async function changePlan(input: Input): Promise<Result<PlanChange, BillingError>> { … }
+
+// A throwing wrapper for callers not yet converted. One line, one leaf.
+async function changePlanOrThrow(input: Input): Promise<PlanChange> {
+  return unwrapOrThrow(await changePlan(input));
+}
+```
+
+On `Err` it throws a real `Error` carrying the original in `cause`, so nothing is
+lost. Point still-throwing callers at the `…OrThrow` wrapper and converted callers
+at the `Result`-returning function; delete the wrapper when the last throwing
+caller is gone.
+
+Going the other way — wrapping a throwing dependency *into* a `Result` — use
+`fromThrowable` / `fromPromise`.
+
+### Mapping a `Result` to an HTTP response
+
+The core takes no opinion on your framework. Map at the boundary with a small
+function you own. **Do not put a `status` field on the `TypedError`** — that
+breaks the four-field shape and its round-trip contract. Dispatch on the
+discriminant instead:
+
+```ts
+import { isErr, matchType } from '@zireal/result-kit';
+
+const errToStatus = (error: BillingError): number =>
+  matchType(error, {
+    plan_not_found: () => 404,
+    missing_company_id: () => 422,
+    missing_base_item: () => 409,
+  });
+
+export async function POST(req: Request) {
+  const result = await changePlan(await req.json());
+
+  if (isErr(result)) {
+    return Response.json(
+      { error: result.error.message, type: result.error.type },
+      { status: errToStatus(result.error) },
+    );
+  }
+
+  return Response.json(result.value);
+}
+```
+
+`matchType` is exhaustive by construction, which is the point: add a variant and
+this mapping stops compiling until you give it a status. A `switch` with
+`default: return 400` looks tidier and quietly maps every new error to `400`
+forever.
+
+If a status is genuinely *intrinsic* to an error rather than a presentation
+choice, carry it as `details.status` — inside the payload, not at the top level.
+
+### Presenting accumulated errors
+
+```ts
+import { combineWithAllErrors, groupByType, prettifyErrors } from '@zireal/result-kit';
+
+const combined = combineWithAllErrors([checkName(i), checkAge(i), checkEmail(i)]);
+
+if (!combined.ok) {
+  console.error(prettifyErrors(combined.error));
+  // ✖ too_short: Name must be at least 2 characters
+  // ✖ out_of_range: Age must be between 13 and 120
+
+  const groups = groupByType(combined.error);
+  groups.too_short?.forEach((e) => highlight(e.details?.field));
+  //     ^? TooShort[] | undefined — optional, because a variant may not have occurred
+}
+```
+
+### There is no `pipe`
+
+v1's `pipe` / `pipeAsync` were removed and have no direct replacement. It is a
+per-site design call between two options:
+
+- **`/fluent`**, for a linear chain: `from(x).map(f).andThen(g)`.
+- **`safeTry`**, when the steps are not a straight line.
+
+---
+
+## 13. Gotchas, in full
+
+**1. A discriminated-union return widens inside `safeTry`.**
+
+```ts
+return ok({ kind: 'noop' });                    // ✗ 'noop' widens to string
+return ok({ kind: 'noop' } satisfies MyUnion);  // ✓ recommended default
+return ok({ kind: 'noop' } as const);           // ✓ terse; flat unions only
+return ok<MyUnion>({ kind: 'noop' });           // ✓ explicit type argument
+```
+
+The generator's return type is inferred *before* it is checked against your union.
+
+**2. `details` is optional on every `TypedError`.** Reading `error.details.issues`
+does not compile; it is `error.details?.issues`. Narrowing the `type` does not
+change this. Inside a `matchType` arm, `e.details!.id` is the idiom.
+
+**3. Only a closed union can be exhausted.** A bare `TypedError` has an open
+`string` tag, so any set of arms satisfies it.
+
+**4. `ok()` with no argument round-trips to a one-field object.**
+`{ ok: true, value: undefined }` serializes to `{ ok: true }` — the `value` key is
+**gone**, not `undefined`. `parseResult` accepts it deliberately.
+
+**5. A bare `{ ok: false }` is rejected by `parseResult`**, unlike its `ok`
+counterpart. The asymmetry is not taste: `err` has no no-arg overload, so that
+shape only ever means a non-serializable error went onto the wire.
+
+**6. `cause` is the one field that breaks serialization.** Strip it at the
+boundary. Watch for `fromSchema`'s `{ includeCause: true }` in particular.
+
+**7. `unwrapOrThrow` is the migration's only *silent* breakage.** Coming from
+1.x's `/nest` adapter, it now throws a plain `Error`, not an `HttpException` —
+so under Nest's default filter a handled `404` becomes an unhandled `500`.
+Nothing fails to compile; the behaviour changed underneath you. Grep for
+`unwrapOrThrow` before you finish.
+
+**8. `/fluent`'s `.isOk()` does not narrow.** See §1.
+
+**9. An `async` callback on a *sync* chain.** `.andThen()` / `.orElse()` reject
+it outright — a loud compile error. `.map()` / `.mapErr()` / `.inspect()` /
+`.inspectErr()` cannot, so they widen the return to `ResultChain | ResultAsync`
+(core: `Result | Promise<Result>`). Call `.toAsync()` first and the type stays a
+single thing. On `ResultAsync`, promise-returning callbacks are fully supported.
+
+**10. ESM only.** No CJS build. `moduleResolution` must be `"bundler"`,
+`"node16"`, or `"nodenext"`. On CommonJS, `require('@zireal/result-kit')` works on
+Node 22.12+, or use `await import(...)`.
+
+**11. There is no `/core`, `/fp-ts`, or `/nest` entrypoint.** Those were v1 and
+are gone. The root *is* the core.
+
+**12. `combine` is tuple-preserving.** `combine([ok(1), ok('a')])` is
+`Result<[number, string], never>`, not `Result<(number | string)[], never>`.
+
+**13. `andThen` widens the error channel** to `E | F`. If you annotated an
+intermediate binding with a single error type, widen the annotation.
+
+---
+
+## 14. Migrating from 1.x
+
+The `ResultKit` static namespace object is **gone**. Every method is now a free
+function imported from the root.
+
+**Types**
+
+| v1 | 5.x |
+|---|---|
+| `Success<T>` | `Ok<T>` (shape unchanged) |
+| `Failure<E>` | `Err<E>` (shape unchanged) |
+| `Result<T, E>` | **unchanged** |
+| `TypedError<TType>` | `TypedError<TType, TData>` — gained an optional payload parameter |
+| `TypedErrorOf<TType>` | **cut** — use `TypedError<TType>` |
+| `TypedErrorUnion<TType>` | **cut** — build it from `defineError` constructors, or `ErrorsOf` |
+
+**Constructors and guards**
+
+| v1 | 5.x |
+|---|---|
+| `ResultKit.success(v)` | `ok(v)` |
+| `ResultKit.failure(e)` | `err(e)` |
+| `ResultKit.fail(typedError)` | `err(typedError)` — no separate typed constructor |
+| `ResultKit.isSuccess(r)` | `isOk(r)` |
+| `ResultKit.isFailure(r)` | `isErr(r)` |
+| `ResultKit.isTypedError(e)` | `isTypedError(e)` |
+
+**Transforms and terminals** — mostly just unnesting from `ResultKit.`, with three
+exceptions:
+
+| v1 | 5.x | |
+|---|---|---|
+| `ResultKit.mapError` | `mapErr` | **renamed**, not just unnested |
+| `ResultKit.andThen` | `andThen` | **behaviour change** — now widens `E` to `E \| F` |
+| `ResultKit.combine` | `combine` | **type change** — now tuple-preserving |
+
+**`match`'s keys changed:**
+
+```ts
+ResultKit.match(result, { onSuccess: …, onFailure: … });  // v1
+match(result, { ok: …, err: … });                          // 5.x
+```
+
+> **Find-and-replace hazard.** `onSuccess` / `onFailure` were **also** the keys of
+> v1's `tap`, where they were optional. A blind `onSuccess` → `ok` replace will
+> corrupt those call sites. `tap` became `inspect` / `inspectErr`, which take a
+> bare function. Migrate `tap` first, then rename `match`'s keys.
+
+**Removed entrypoints:** `/core` → the root. `/fp-ts` → convert at your own
+boundary. `/nest` → map to HTTP yourself (see §12).
+
+**The one silent breakage:** `unwrapOrThrow`. See §13, gotcha 7.
+
+---
+
+## 15. Vocabulary
+
+Use these words; avoid the alternatives. Getting the vocabulary right is most of
+getting the code right.
+
+| Use | Not |
+|---|---|
+| `Result` | Either (the fp-ts framing this sheds), Outcome |
+| `Ok` / `Err` | Success / Failure (v1 type names) |
+| `ok` / `err` | success / failure / fail (v1 names) |
+| `isOk` / `isErr` | isSuccess / isFailure |
+| `TypedError` | TaggedError, AppError, DomainError (those are userland variants built *with* it) |
+| `type` (the discriminant) | tag, `_tag`, kind, code |
+| `details` | data, payload, meta, context |
+| `defineError` | makeError, createError, errorType |
+| `ResultChain` | ResultPipeline (the v1 class), Chain, Wrapper, Builder, "the fluent Result" |
+| `ResultAsync` | AsyncResultPipeline, AsyncResult, FutureResult, TaskResult, ResultPromise |
+| `safeTry` | gen (Effect's name), doNotation, attempt, tryCatch, safeTryAsync (no such thing) |
+| `safeUnwrap` | unwrap (means "throws" across the genre — deliberately unused), bind, `$` |
+| `matchType` | match (taken by the `Result` terminal), matchError, matchTag, exhaustive |
+| `groupByType` | groupBy, byType, format, flatten |
+| `prettifyErrors` | prettifyError (zod's, and it takes an object not an array), format, render |
+| the fallback (of `matchType`) | "the default arm" — it is not a `default:` branch and does not see the whole union |
+
+### Relationships
+
+- A failed `Result` carries an `error` of type `E`; when the producer opts in,
+  that `E` is a `TypedError`.
+- `defineError` produces `TypedError` values; `err` wraps any `E` into a failed
+  `Result`.
+- `ResultChain` / `ResultAsync` wrap a `Result`; `.toResult()` is the way out, and
+  the plain union is what crosses a boundary. `.toAsync()` is the one seam from
+  sync to async.
+- `safeTry` consumes what `safeUnwrap` (or a self-iterable wrapper) yields. The
+  two always appear together.
+- `matchType` consumes one `TypedError`; `match` consumes one `Result`. The
+  idiomatic pairing is `match(r, { ok: …, err: (e) => matchType(e, …) })`.
+- `combineWithAllErrors` produces the accumulated `TypedError[]` that
+  `groupByType` and `prettifyErrors` consume. `partition`'s second half is equally
+  valid input.
+- `resultMatchers` delegates every failure message to `expectOk` / `expectErr`.
+- The wrappers are **opt-in ergonomics, never a requirement**. That split is what
+  makes the core tree-shakable.
+
+---
+
+Full documentation: <https://github.com/alifaroo-q/result-kit>
