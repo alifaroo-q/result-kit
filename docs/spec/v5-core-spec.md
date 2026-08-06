@@ -255,7 +255,7 @@ Source: [ADR 0001](../adr/0001-v2-core-api-paradigm.md), [ADR 0005 §1](../adr/0
 ```
 ┌─ @zireal/result-kit  (root, `.`) ────────────────────────────┐
 │  Result<T,E> = Ok<T> | Err<E>     ← plain data, no methods   │
-│  29 free functions, data-first, single-signature, no curry   │
+│  29 free functions, data-first, no curry, no data-last       │
 │  async = Promise<Result<T,E>>     ← stdlib; no new type      │
 │  SELF-SUFFICIENT: never needs /fluent                        │
 └──────────────────────────────────────────────────────────────┘
@@ -277,11 +277,17 @@ Three rules govern this split, and every one of them is enforceable:
 
 **Positioning** (drives README and tutorials): the **fluent wrapper is the documented hero**; the **free-function core is the first-class, supported "lean / tree-shakable" escape hatch** — the differentiator class-only neverthrow structurally cannot offer.
 
+**What earns a seat in the root barrel** (2026-08-06): **root surface earns its seat by making expressible what was not otherwise expressible — never by making an expressible thing shorter.** The corollary is what makes the positioning above load-bearing rather than a taste claim: an ergonomics-only argument for a root export is answered by *"that is `/fluent`'s job"*, and a caller who declined `/fluent` over bundle size is the caller least likely to want another export in their graph. This is stated descriptively — it is the rule three independent decisions turned out to share, not a rule imposed on them ahead of time. Root `pipe` offered only a shorter spelling of composition already available three ways, and was measured as the *longest* spelling at all three call-sites ([ADR 0016](../adr/0016-declining-root-pipe-flow-dual.md)); §5.4's record overload recovers the **key**, which the array form structurally cannot give back ([ADR 0017](../adr/0017-object-form-combine.md)); and the resource-safety helper was declined because `safeTry` + `finally` and `using` already expressed it, while the one residue no export could close was never on the table (`RECIPES.md`). Because it is descriptive it binds nothing on its own — an export that clears it still needs its own case.
+
 **Dual constructors** ([ADR 0001 §4](../adr/0001-v2-core-api-paradigm.md), reaffirmed by [ADR 0005 §4](../adr/0005-v2-async-strategy.md) and [ADR 0007 §3](../adr/0007-v2-do-notation-helper.md)): **same name, surface-appropriate return type**. `ok`/`err`/`safeTry`/`fromPromise`/`fromThrowableAsync` exist at both entrypoints; the root returns plain data, `/fluent` returns wrappers.
 
 ## 5. Root entrypoint — `@zireal/result-kit`
 
-**29 free functions.** Data-first, **one signature, no currying, no data-last variants** — the auto-curry tree-shaking trap is why. Async is handled by overloads, never by an `Async`-suffixed twin.
+**29 free functions.** Data-first, **no currying, no data-last variants** — the auto-curry tree-shaking trap is why. Async is handled by overloads, never by an `Async`-suffixed twin.
+
+> **Amended (2026-08-06): what is banned is currying, not overloading.** This sentence read "**one signature**, no currying, no data-last variants", which was true when written and is not any more: §5.4's two combinators each declare a second signature, overloading on *input shape* (array vs. record). The ban was always aimed at the auto-curry tree-shaking trap and at data-last doubles — the same clause already tolerated the async overloads named in its own next sentence, so "one signature" was never the rule it looked like. Overloads that dispatch on the shape of an argument are **permitted**; overloads that re-spell the same call data-last are not. Corrected here rather than left to §5.4's own note, because a reader learning what this package refuses reads §5, not §5.4. Rationale for the §5.4 case is [ADR 0017](../adr/0017-object-form-combine.md); the decline that fixes the other half of the line is [ADR 0016](../adr/0016-declining-root-pipe-flow-dual.md).
+>
+> The count in this sentence, and in §4's diagram, is **separately stale** — see the note on §5.9's export table.
 
 ### 5.1 Constructors & guards (6)
 
