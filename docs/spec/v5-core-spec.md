@@ -790,6 +790,8 @@ Ordered so the biggest break comes first:
 
    All `xAsync` doubles are gone too: `mapAsync`, `mapErrorAsync`, `andThenAsync`, `orElseAsync`, `matchAsync`, `unwrapOrElseAsync`, `tapAsync`, `combineAsync`, `combineWithAllErrorsAsync`. The §5.2 overloads absorb them.
 4. **`pipe`/`pipeAsync` → `/fluent` or `safeTry`** — prose plus before/after. **A per-site design call, not a substitution.**
+
+   The row above collapses two different things into one cut: the `ResultPipeline` / `AsyncResultPipeline` **classes**, and the `pipe` **composition helper**. Only the classes were cut on wrapper-machinery grounds — a bare variadic `pipe` was later evaluated on its own merits and declined too, along with `flow` and `dual`. See [ADR 0016](../adr/0016-declining-root-pipe-flow-dual.md); do not re-open without re-opening `dual` first.
 5. **Removed entrypoints** — `/nest` and `/fp-ts` (§8.5).
 6. **Net-new** — `safeTry` / `safeUnwrap`, `defineError`, the `/fluent` entrypoint, `unwrapOrThrow`, `inspect` / `inspectErr`, the `fromPredicate` type-guard overload.
 
