@@ -255,7 +255,7 @@ Source: [ADR 0001](../adr/0001-v2-core-api-paradigm.md), [ADR 0005 §1](../adr/0
 ```
 ┌─ @zireal/result-kit  (root, `.`) ────────────────────────────┐
 │  Result<T,E> = Ok<T> | Err<E>     ← plain data, no methods   │
-│  29 free functions, data-first, no curry, no data-last       │
+│  37 free functions, data-first, no curry, no data-last       │
 │  async = Promise<Result<T,E>>     ← stdlib; no new type      │
 │  SELF-SUFFICIENT: never needs /fluent                        │
 └──────────────────────────────────────────────────────────────┘
@@ -283,13 +283,13 @@ Three rules govern this split, and every one of them is enforceable:
 
 ## 5. Root entrypoint — `@zireal/result-kit`
 
-**29 free functions.** Data-first, **no currying, no data-last variants** — the auto-curry tree-shaking trap is why. Async is handled by overloads, never by an `Async`-suffixed twin.
+**37 free functions.** Data-first, **no currying, no data-last variants** — the auto-curry tree-shaking trap is why. Async is handled by overloads, never by an `Async`-suffixed twin.
 
 > **Amended (2026-08-06): what is banned is currying, not overloading.** This sentence read "**one signature**, no currying, no data-last variants", which was true when written and is not any more: §5.4's two combinators each declare a second signature, overloading on *input shape* (array vs. record). The ban was always aimed at the auto-curry tree-shaking trap and at data-last doubles — the same clause already tolerated the async overloads named in its own next sentence, so "one signature" was never the rule it looked like. Overloads that dispatch on the shape of an argument are **permitted**; overloads that re-spell the same call data-last are not. Corrected here rather than left to §5.4's own note, because a reader learning what this package refuses reads §5, not §5.4. Rationale for the §5.4 case is [ADR 0017](../adr/0017-object-form-combine.md); the decline that fixes the other half of the line is [ADR 0016](../adr/0016-declining-root-pipe-flow-dual.md).
 >
-> The count in this sentence, and in §4's diagram, is **separately stale** — see the note on §5.9's export table.
+> **Amended (2026-08-06): the count is now 37, was 29.** This sentence and §4's diagram both read `29`, while §5.9's table read `33` — three statements of one number, none of them true and no two of them agreeing. All three are reconciled against the shipped barrel in the same pass; see the note on §5.9's export table for what the number now means and what it deliberately excludes.
 
-### 5.1 Constructors & guards (6)
+### 5.1 Constructors & guards (7)
 
 ```ts
 export function ok(): Ok<void>;
@@ -301,7 +301,7 @@ export function isErr<T, E>(result: Result<T, E>): result is Err<E>;
 
 export function isTypedError(x: unknown): x is TypedError;
 
-// defineError — §3.1
+// defineError, defineErrors — §3.1
 ```
 
 - **Narrow returns.** `ok`/`err` return `Ok<T>`/`Err<E>`, *not* `Result<T, never>`/`Result<never, E>`. Narrow is strictly more precise — it still assigns into any `Result<T, E>` annotation (widening is free) while preserving `.value`/`.error` access for code holding a known half. **Both clauses hold for the value itself and neither survived a transform until §10.10** — a narrow half offers `E` no inference site, so `E` fell back to `unknown` one hop later and stopped assigning anywhere. The decision stands; its cost is now recorded and paid by defaulting `E` to `never`.
@@ -544,26 +544,34 @@ export type { OkTypeOf, ErrTypeOf };        // §5.4 — see §10
 
 `OkTypeOf` / `ErrTypeOf` extract the halves of a `Result`; they appear in `combine`'s public signature. `ErrorCtor` is `defineError`'s return type. **All three are exported** — see §10 for why.
 
+> **This block names the types §5 itself specifies, not the whole exported set** — §5.9's list is the complete one, and it carries six more (`ErrorsOf`, plus the five belonging to the groups §5 has no subsection for). Noted 2026-08-06 alongside the §5.9 reconciliation, because an incomplete list with no count reads as complete.
+
 ### 5.9 Complete root export list
 
-**Values (33):**
+**Values (37):**
 
-| Group | Exports |
-|---|---|
-| Constructors & guards (7) | `ok` `err` `isOk` `isErr` `isTypedError` `defineError` `defineErrors` |
-| Error matching (1) | `matchType` |
-| Formatters (2) | `groupByType` `prettifyErrors` |
-| Transforms (6) | `map` `mapErr` `andThen` `orElse` `inspect` `inspectErr` |
-| Terminals (5) | `match` `unwrapOr` `unwrapOrElse` `unwrapOrThrow` `toNullable` |
-| Collections (3) | `combine` `combineWithAllErrors` `partition` |
-| Interop (3) | `fromNullable` `fromPredicate` `fromThrowable` |
-| Async constructors (2) | `fromPromise` `fromThrowableAsync` |
-| Do-notation (2) | `safeTry` `safeUnwrap` |
-| Assertions (2) | `expectOk` `expectErr` |
+| Group | Exports | Specified in |
+|---|---|---|
+| Constructors & guards (7) | `ok` `err` `isOk` `isErr` `isTypedError` `defineError` `defineErrors` | §5.1, §3.1 |
+| Error matching (1) | `matchType` | §3.5 |
+| Formatters (2) | `groupByType` `prettifyErrors` | §3.4 |
+| Transforms (6) | `map` `mapErr` `andThen` `orElse` `inspect` `inspectErr` | §5.2 |
+| Terminals (5) | `match` `unwrapOr` `unwrapOrElse` `unwrapOrThrow` `toNullable` | §5.3 |
+| Collections (3) | `combine` `combineWithAllErrors` `partition` | §5.4 |
+| Interop (3) | `fromNullable` `fromPredicate` `fromThrowable` | §5.5 |
+| Async constructors (2) | `fromPromise` `fromThrowableAsync` | §5.6 |
+| Schema adapters (2) | `fromSchema` `fromSchemaAsync` | — [ADR 0015](../adr/0015-standard-schema-issue-mapping.md) |
+| Envelope parsing (2) | `isResult` `parseResult` | — [#66](https://github.com/alifaroo-q/result-kit/issues/66) |
+| Do-notation (2) | `safeTry` `safeUnwrap` | §5.7 |
+| Assertions (2) | `expectOk` `expectErr` | — [ADR 0011](../adr/0011-testing-subpath-matchers.md) |
 
-**Types (9):** `Result` `Ok` `Err` `TypedError` `ErrorCtor` `ErrorsOf` `OkTypeOf` `ErrTypeOf` `KeyedError`
+**Types (13):** `Result` `Ok` `Err` `TypedError` `ErrorCtor` `ErrorsOf` `OkTypeOf` `ErrTypeOf` `MalformedResult` `MalformedResultReason` `FromSchemaOptions` `ValidationFailed` `ValidationIssue`
 
-> **This table is stale and is not the source of truth for the shipped surface.** It has not tracked the exports added since it was written (`isResult` / `parseResult` and their two types, `fromSchema` / `fromSchemaAsync` and theirs), so it reads 33 values / 9 types where the package ships 37 values and 13 types — the counts stated in `llms-full.txt` and pinned by `test/docs/agent-kit.spec.ts`, which is the guard that actually holds. `KeyedError` (2026-08-06) is added here for completeness of the §5.4 amendment; reconciling the rest of the table is separate work.
+> **Reconciled 2026-08-06 against the shipped barrel — was "Values (33)" / "Types (9)".** The table had not tracked four exports added since it was written (`fromSchema` / `fromSchemaAsync`, `isResult` / `parseResult`) or their five types, and the same drift had reached §4's diagram and §5's opening sentence as a *different* wrong number (29). The counts above are now those of `src/index.ts`, and they agree with `llms-full.txt` — pinned by `test/docs/agent-kit.spec.ts`, which is the guard that actually held throughout and is why the drift went unnoticed. **That guard, not this table, remains the source of truth**: it reads the barrel, and this table is hand-maintained.
+>
+> **`KeyedError` is specified but not yet shipped**, so it is deliberately absent above. §5.4's record overloads declare it and [ADR 0017](../adr/0017-object-form-combine.md) records the bump; when they land it becomes the **14th** type here and in `llms-full.txt`, in the same commit.
+>
+> **Three groups have no §5 subsection** — the schema adapters, envelope parsing, and the assertions each landed against an ADR or an issue rather than a spec group, and the "Specified in" column says so with an em dash rather than inventing a section number. Writing those subsections is separate work; it is a documentation gap, not a count error, and this pass deliberately did not re-open what is exported.
 
 **Not exported from root:** `ResultChain`, `ResultAsync`, `from` — these are `/fluent` only, and §7.3's guard enforces it.
 
@@ -714,7 +722,7 @@ Source: [ADR 0006](../adr/0006-v2-package-layout-entrypoints.md).
 ### 7.1 Format, entrypoints, floors
 
 - **ESM-only.** No CJS output, no `.cjs`, no split type files. A CJS consumer reaches 5.0.0 via `require(esm)` (guaranteed by the Node floor) or dynamic `import()`. Consequence: a **single `.d.ts` per entry**, and the "masquerading types" dual-package hazard **cannot occur**.
-- **Exactly three entrypoints:** `.` (flat, self-tree-shakable barrel — all 29 functions + the 7 public types) · `./fluent` · `./package.json`. The v1 `./core`, `./fp-ts`, `./nest` are **all removed**. No `/esm` deep-path hack. No category subpaths.
+- **Exactly three entrypoints:** `.` (flat, self-tree-shakable barrel — all 37 functions + the 13 public types) · `./fluent` · `./package.json`. The v1 `./core`, `./fp-ts`, `./nest` are **all removed**. No `/esm` deep-path hack. No category subpaths.
 
   > **Amended by [ADR 0014 §1](../adr/0014-peer-dependency-policy-and-lint-package-layout.md), shipped in [#63](https://github.com/alifaroo-q/result-kit/issues/63) (2026-08-05): there is now a fourth, `./testing`.** Recorded rather than silently edited, because the count was load-bearing prose and a reader who remembers "exactly three" should find out why it changed.
   >
