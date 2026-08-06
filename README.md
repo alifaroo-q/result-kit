@@ -141,6 +141,8 @@ Three caveats on that round-trip:
 - Exit the fluent wrapper first — serialize `chain.toResult()`, not the chain.
 - **`ok()` with no argument does not survive it.** The value is `{ ok: true, value: undefined }` — two fields, as always — but `JSON.stringify` omits an `undefined` property, so it round-trips to `{ ok: true }` and the `value` key is *gone*, not `undefined`. Code doing `'value' in parsed` will be surprised; `parsed.value` still reads `undefined` and is usually fine.
 
+Coming back the *other* way, `JSON.parse` hands you an `unknown` — so use [`parseResult`](#validating-re-entry--parseresult) rather than asserting `as Result<T, E>`.
+
 ### Narrowing
 
 `isOk` / `isErr` are type predicates, so the field access after them is checked:
@@ -227,10 +229,12 @@ On the fluent side, `.isOk()` / `.isErr()` return **plain booleans** and buy you
 | `fromThrowableAsync(fn, onReject)` | The lazy, reusable form of `fromPromise` |
 | `fromSchema(schema, options?)` | Any [Standard Schema](https://standardschema.dev) validator becomes a `Result`-returning function |
 | `fromSchemaAsync(schema, options?)` | The same, for a schema that validates asynchronously |
+| `isResult(value)` | Type-predicate guard: is this `unknown` a `Result`? |
+| `parseResult(value)` | The same check, with a typed error saying why it failed |
 
 **Do-notation** — `safeTry`, `safeUnwrap`. See [below](#do-notation).
 
-**Types** — `Result` `Ok` `Err` `TypedError` `ErrorCtor` `ErrorsOf` `OkTypeOf` `ErrTypeOf` `ValidationIssue` `ValidationFailed` `FromSchemaOptions`
+**Types** — `Result` `Ok` `Err` `TypedError` `ErrorCtor` `ErrorsOf` `OkTypeOf` `ErrTypeOf` `ValidationIssue` `ValidationFailed` `FromSchemaOptions` `MalformedResult` `MalformedResultReason`
 
 #### Validation — `fromSchema`
 
@@ -258,6 +262,35 @@ One caveat worth knowing before you log an issue list: `issue.message` is the **
 `fromSchema` is synchronous and **throws** if handed an async schema — the spec's own type says any schema *may* be async, so it cannot be caught at compile time. `fromSchemaAsync` accepts both, and is the one to reach for when you do not know statically which you have.
 
 See [ADR 0015](docs/adr/0015-standard-schema-issue-mapping.md) for the full rationale.
+
+#### Validating re-entry — `parseResult`
+
+A `Result` leaves cleanly; `JSON.parse` hands it back as `unknown`. Without a check, that gap is closed with `as Result<T, E>` — an assertion nothing verifies, on data you did not author.
+
+```ts
+import { isErr, isOk, parseResult } from '@zireal/result-kit';
+
+const parsed = parseResult(await response.json());
+
+if (isErr(parsed)) {
+  console.error(parsed.error.details.reason); // 'not_an_object' | 'error_dropped' | …
+  return;
+}
+
+const result = parsed.value;                  // Result<unknown, unknown>
+if (isOk(result)) result.value;
+```
+
+The nesting is deliberate: the outer `Result` answers *was this a `Result` at all*, the inner one *did the operation succeed*. Collapsing them would make a corrupt envelope indistinguishable from a reported failure — the exact distinction the function exists to draw. Reach for `isResult` instead when you just want an `if`; it is the same check as a type predicate, with no diagnostic and no nesting.
+
+**Both halves stay `unknown`, and there is no generic parameter.** `parseResult<User, E>(json)` would be the same unchecked assertion wearing a friendlier face — this proves the *envelope* and nothing about what it carries. Narrow the payload with [`fromSchema`](#validation--fromschema), or your own guard.
+
+It validates and never rewrites: on success you get back **the same object**, extra properties and all — a `traceId` your gateway stamped onto the envelope rides through untouched, because §2's two-field rule governs what this package *builds*, not what it will look at.
+
+Two rejections are worth knowing about, both about properties `JSON.stringify` drops:
+
+- A round-tripped `ok()` is `{ ok: true }` with no `value` key, and it is **accepted** — it is the output of the form this package recommends for a void success.
+- A bare `{ ok: false }` is **rejected**, with reason `'error_dropped'`. `err` has no no-arg form, so that shape only arises when a payload that is not JSON-serializable — `undefined`, a function, a symbol — was dropped in transit. Send `"error": null` for a failure with no detail. Accepting it would hand you an `Err` whose `.error` is `undefined`, which crashes `matchType`, `groupByType` and `prettifyErrors` one hop later.
 
 ### `/fluent` — `@zireal/result-kit/fluent`
 
