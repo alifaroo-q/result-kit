@@ -383,6 +383,30 @@ export function combineWithAllErrors<T extends readonly Result<unknown, unknown>
 ): Result<{ [K in keyof T]: OkTypeOf<T[K]> }, ErrTypeOf<T[number]>[]>;
 
 export function partition<T, E>(results: readonly Result<T, E>[]): [T[], E[]];
+
+// Record ("object form") overloads — declared beneath the array signatures above,
+// which stay verbatim. See the 2026-08-06 amendment below.
+
+export type KeyedError<K extends PropertyKey, E> = {
+  readonly key: K;
+  readonly error: E;
+};
+
+export function combine<T extends Record<string, Result<unknown, unknown>>>(
+  results: T,
+): Result<
+  { [K in keyof T]: OkTypeOf<NonNullable<T[K]>> },
+  ErrTypeOf<NonNullable<T[keyof T]>>
+>;
+
+export function combineWithAllErrors<
+  T extends Record<string, Result<unknown, unknown>>,
+>(
+  results: T,
+): Result<
+  { [K in keyof T]: OkTypeOf<NonNullable<T[K]>> },
+  { [K in keyof T]-?: KeyedError<K, ErrTypeOf<NonNullable<T[K]>>> }[keyof T][]
+>;
 ```
 
 > **Amended (2026-07-17, at implementation): `partition` takes a `readonly` array.** This section wrote it mutable while both combinators above take `readonly` inputs, so a `readonly Result<T, E>[]` that `combine` accepts broke one call later at `partition` — for no stated reason, since nothing in `partition` mutates its input.
@@ -391,9 +415,18 @@ export function partition<T, E>(results: readonly Result<T, E>[]): [T[], E[]];
 >
 > Pinned by `test/core/collections.spec.ts`; enforced by `pnpm check`.
 
-- **`combine` is fail-fast** (first error, errors unioned); **`combineWithAllErrors` accumulates every error** as a flat array — the `ZodError.issues[]` analog, and the whole of the accumulation story.
+> **Amended (2026-08-06): the two combinators gain a record ("object form") overload.** Rationale, rejected alternatives and the reversal condition are in [ADR 0017](../adr/0017-object-form-combine.md); evidence is `spikes/effect-gen-comparison/FINDINGS.md` Part 3 (F14–F17). `partition` does **not** gain one — record support is a property of the combinators, not of this section.
+>
+> **Overloads, not one unified signature.** An array of `Result`s is not assignable to `Record<string, Result<unknown, unknown>>`, so the record overload is unreachable for an array input regardless of declaration order, and tuple preservation cannot degrade (F14). Effect's single `const Arg` spelling was rejected: `const T` leaks `readonly` into the success value, changing an already-shipped signature at call-sites with nothing to do with this feature (F15).
+>
+> **Two clauses in the signatures are load-bearing.** `NonNullable<T[K]>` is required rather than defensive — with an optional key `T[K]` is `Result | undefined`, which fails `OkTypeOf`'s and `ErrTypeOf`'s `R extends Result<unknown, unknown>` constraint, so the signature does not compile without it. And `-?` appears on the **error** mapped type but deliberately **not** on the success one: optionality must survive on the success side (`{ posts?: Result<string, E> }` maps to `posts?: string | undefined`, which is correct), while on the error side an optional key without `-?` puts `undefined` into the entry union — §10.6's failure mode, and the defect that sank the partial-record alternative. The asymmetry reads as an inconsistency and must carry a doc comment and a type-level assertion.
+
+- **`combine` is fail-fast** (first error, errors unioned); **`combineWithAllErrors` accumulates every error** as a flat array for an array input, and as a **`KeyedError` array** for a record input — the `ZodError.issues[]` analog, and the whole of the accumulation story.
+- **The record form of `combineWithAllErrors` carries keys; the array form stays flat.** The pair is knowingly asymmetric: a record knows the name of each part and throwing that away is the only reason not to pass one. `KeyedError` keeps `key` and `error` correlated per entry, so `switch (entry.key)` narrows `error` to that key's variant; over an index-signature record it degenerates honestly to `KeyedError<string, E>`. The consequence to state at the call-site: a `KeyedError[]` is **not** accepted by `groupByType` or `prettifyErrors`, which take a flat `TypedError[]` — bridge with `errors.map((e) => e.error)`.
+- **"First `Err`" means property order for a record input, not order as written.** `combine({ 10: late, 2: early })` returns `early`: `Object.keys` yields integer-like keys in ascending numeric order *before* insertion-ordered string keys, and `combineWithAllErrors` inherits the same ordering for accumulation. Only own enumerable properties participate, matching `parse.ts`. **Symbol keys are invisible** — a symbol-keyed `Err` does not join the string index signature, so it type-checks and is silently dropped. This is documented rather than closed: it matches the §2.1 serialization boundary the package is built around, and a per-call symbol scan would defend against a shape the type system cannot express usefully.
+- **A present-but-`undefined` entry throws a named diagnostic.** An optional key may carry `undefined` as a *present* own key; reading `.ok` off it threw a bare `TypeError` — a handler that is itself the crash. It stays a hard failure (a non-`Result` in the bag is a programming error, and skipping it silently would hide a real mistake) but reports through `render.ts`'s diagnostic family, naming the offending key: `combine: value at key "posts" is not a Result (received: undefined)`. **The array path takes the same guard**, since `for...of` over a sparse array yields `undefined` identically — that half is a fix to shipped behaviour. The two paths differ in *when* they fire: the record path validates the whole bag first, so the diagnostic is deterministic rather than hiding behind whichever `Err` happened to come first; the array path guards as visited, because a sparse array is reachable only through a cast and the hot path should not pay a second pass.
 - **Both preserve tuples** — heterogeneous per-position types, with the homogeneous array as a special case.
-- **Empty input is `ok([])`** for both combinators — the identity that makes `combine` fold-like, and what keeps `combineWithAllErrors` from erring on *no* errors. `partition([])` is `[[], []]`.
+- **Empty input is `ok([])`** for both combinators — the identity that makes `combine` fold-like, and what keeps `combineWithAllErrors` from erring on *no* errors. **`combine({})` is `ok({})`**, the same identity in the record form rather than a special case; an empty *array* still picks the array overload, so the two never contend. `partition([])` is `[[], []]`.
 - **`partition` is best-effort** — always returns the successes that worked *plus* the failures. This is the batch capability the all-or-nothing combinators cannot express. It returns a plain tuple, not a `Result`: it has no failure mode.
 - **No promise overloads.** `await Promise.all([...])` first, then hand the plain `Result[]` to the combinator. Overloading over *arrays of unions vs. arrays of promises-of-unions* is a combinatorial inference mess for a thin gain.
 
@@ -522,7 +555,9 @@ export type { OkTypeOf, ErrTypeOf };        // §5.4 — see §10
 | Do-notation (2) | `safeTry` `safeUnwrap` |
 | Assertions (2) | `expectOk` `expectErr` |
 
-**Types (8):** `Result` `Ok` `Err` `TypedError` `ErrorCtor` `ErrorsOf` `OkTypeOf` `ErrTypeOf`
+**Types (9):** `Result` `Ok` `Err` `TypedError` `ErrorCtor` `ErrorsOf` `OkTypeOf` `ErrTypeOf` `KeyedError`
+
+> **This table is stale and is not the source of truth for the shipped surface.** It has not tracked the exports added since it was written (`isResult` / `parseResult` and their two types, `fromSchema` / `fromSchemaAsync` and theirs), so it reads 33 values / 9 types where the package ships 37 values and 13 types — the counts stated in `llms-full.txt` and pinned by `test/docs/agent-kit.spec.ts`, which is the guard that actually holds. `KeyedError` (2026-08-06) is added here for completeness of the §5.4 amendment; reconciling the rest of the table is separate work.
 
 **Not exported from root:** `ResultChain`, `ResultAsync`, `from` — these are `/fluent` only, and §7.3's guard enforces it.
 
