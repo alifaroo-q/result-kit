@@ -52,6 +52,19 @@ const RESUMED_AFTER_SHORT_CIRCUIT =
  * `Promise<Result<T, E>>`, awaits correctly, fails `instanceof`, took the sync
  * branch, read `.ok` as `undefined` and yielded the raw promise as a malformed
  * `Err`. Fixed in [#28]; pinned by a cross-realm regression test.
+ *
+ * Known limitation, §10.7's class (inherited from the language, not chosen):
+ * inside an **async** body, a `Result` that also carries a callable `then` —
+ * legal, §2's union is brandless — cannot survive to the caller. Async
+ * generators await what they yield and promises assimilate what they resolve,
+ * so the `then` is invoked and its answer replaces the `Result`; a promise
+ * cannot resolve to a thenable even in principle. The sync path is immune
+ * (`isSettledResult` asks Result-first, and nothing awaits), which is pinned;
+ * the async residue is documented here rather than "fixed", because no runtime
+ * check can deliver a value the language's own resolution machinery consumes.
+ * Characterized against Effect v4 in `spikes/effect-gen-comparison` — Effect
+ * cannot hit this only because its values are branded and never thenable-
+ * shaped, a trade this package declined to keep §2.1's JSON round trip.
  */
 export function safeUnwrap<T, E = never>(result: Result<T, E>): Generator<Err<E>, T>;
 export function safeUnwrap<T, E = never>(
