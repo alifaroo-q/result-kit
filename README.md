@@ -17,7 +17,7 @@ const greeting = ok(user)
 
 > **Upgrading from 1.x?** See [`MIGRATION.md`](MIGRATION.md). It is a full rework — most names moved, and one of them (`unwrapOrThrow`) breaks *silently*.
 >
-> **Adopting it in a real codebase?** [`RECIPES.md`](RECIPES.md) covers the patterns that come up first: gradual adoption alongside throwing code, mapping to HTTP, testing, and the one type gotcha to know about.
+> **Adopting it in a real codebase?** [`RECIPES.md`](RECIPES.md) covers the patterns that come up first: gradual adoption alongside throwing code, mapping to HTTP, sending typed errors across a server/client boundary, testing, and the one type gotcha to know about.
 
 ---
 
@@ -135,13 +135,7 @@ Purely structural — there is no brand. Any `{ ok: true, value }` **is** an `Ok
 const parsed = JSON.parse(JSON.stringify(result)); // still a usable Result
 ```
 
-Three caveats on that round-trip:
-
-- A `cause` may hold something non-serializable.
-- Exit the fluent wrapper first — serialize `chain.toResult()`, not the chain.
-- **`ok()` with no argument does not survive it.** The value is `{ ok: true, value: undefined }` — two fields, as always — but `JSON.stringify` omits an `undefined` property, so it round-trips to `{ ok: true }` and the `value` key is *gone*, not `undefined`. Code doing `'value' in parsed` will be surprised; `parsed.value` still reads `undefined` and is usually fine.
-
-Coming back the *other* way, `JSON.parse` hands you an `unknown` — so use [`parseResult`](#validating-re-entry--parseresult) rather than asserting `as Result<T, E>`.
+That property is load-bearing enough to have its own section — see [Across the wire](#across-the-wire) for what it buys, what to send it over, and the three things that do not survive the trip.
 
 ### Narrowing
 
@@ -158,6 +152,72 @@ if (isOk(result)) {
 ```
 
 On the fluent side, `.isOk()` / `.isErr()` return **plain booleans** and buy you no narrowing — a method cannot emit a predicate about its own class's generics. Narrow with `.match()` or a terminal instead, or leave the wrapper with `.toResult()` first.
+
+---
+
+## Across the wire
+
+Most error-handling libraries stop at the process boundary. A thrown `Error` does not serialize — `JSON.stringify(new Error('x'))` is `{}` — and a `Result` that is a **class instance** does not either: the methods are gone, `instanceof` is false, and what arrives is a bag of fields wearing the wrong type.
+
+A `@zireal/result-kit` `Result` is [plain data by contract](#resultt-e), so it crosses intact and **stays a `Result`** on the other side. That turns the usual boundary ceremony — a status code, a bespoke `{ error: string }` envelope, a `try`/`catch` that flattens every failure to a message — into nothing at all: you return the value you already had.
+
+```ts
+// server
+return err(seatTaken({ seatId }));
+
+// client — the same union, narrowed
+if (isErr(result)) matchType(result.error, { seat_taken: …, flight_closed: … });
+```
+
+**End-to-end typed errors, server to client, with no codegen step.** No generated client, no schema-to-type pipeline, no drift between the two: the client's types are the server's types because they are the same declarations.
+
+The worked version of everything below is [`examples/wire.ts`](examples/wire.ts), which is type-checked by `pnpm check`.
+
+### One pattern, two transports
+
+The pattern is always the same — *return a `Result`, narrow it on the far side*. What differs is whether the **type** made the trip with the value.
+
+**When the type crosses too** — a Next.js server action, a typed RPC client, tRPC, a typed worker channel — there is nothing to do. The client already has `Result<Booking, BookingError>` and narrows it directly:
+
+```ts
+const result = await bookSeat(input);
+
+return isOk(result) ? `Booked ${result.value.seatId}` : explain(result.error);
+```
+
+Keep the framework-facing function **thin**. The action is a wrapper; the substance is an ordinary `Result`-returning function it calls:
+
+```ts
+'use server';
+
+export async function bookSeatAction(input: unknown) {
+  return createBooking(input);   // plain TypeScript, no framework in sight
+}
+```
+
+That is not just tidiness. It is what keeps the pattern true on a route handler, a queue consumer and a test, without rewriting it — and it keeps your error logic out of the one file the framework owns.
+
+**When the type is lost** — `fetch`, `postMessage`, a message queue — `response.json()` hands you `unknown`, and closing that gap with `as Result<T, E>` is an assertion nothing verifies on data you did not author. Prove it back instead, in two steps:
+
+```ts
+const envelope = parseResult(await response.json());
+if (isErr(envelope)) return `Bad response (${envelope.error.details?.reason})`;
+
+const result = envelope.value;        // Result<unknown, unknown> — envelope proven
+if (isErr(result)) return renderError(result.error);
+
+const booking = parseBooking(result.value);   // fromSchema — payload proven
+```
+
+[`parseResult`](#validating-re-entry--parseresult) proves the **envelope** and deliberately takes no generic; [`fromSchema`](#validation--fromschema) proves the **payload**. The envelope is provable and what it carries is not, so they are separate steps on purpose.
+
+> One line worth knowing on the easy transport: a server action's return type is a *compiler* promise, not a runtime check. Across a version skew it can be wrong. `parseResult` is available there too if you want the belt as well as the braces — it is simply not the common case, and paying for it on every call is not the default worth teaching.
+
+### The three things that do not survive
+
+- **`cause` may hold anything.** It is the one field in the four-field [`TypedError`](#structured-errors) shape typed `unknown`, so it is the one route a non-serializable value takes into an otherwise JSON-safe `Result`. This collides head-on with [`fromSchema`](#validation--fromschema)'s `{ includeCause: true }`, which puts the **raw vendor issues** there — the rejected input included, so a cycle, a `BigInt` or a user's password can ride out in the response body. Strip `cause` at the boundary, in the one function that serializes. This package never mutates your error data to do it for you.
+- **`ok()` with no argument.** The value is `{ ok: true, value: undefined }` — two fields, as always — but `JSON.stringify` omits an `undefined` property, so it arrives as `{ ok: true }` with the `value` key *gone*, not `undefined`. `parseResult` accepts that shape deliberately; code doing `'value' in parsed` will be surprised, while `parsed.value` still reads `undefined` and is usually fine.
+- **The fluent wrapper.** Exit it first — serialize `chain.toResult()`, not the chain. The plain union is the interchange type; the wrapper is a transient envelope for the duration of a chain.
 
 ---
 
@@ -247,7 +307,7 @@ const parseUser = fromSchema(UserSchema);   // one wrap, many calls
 
 const result = parseUser(await req.json()); // Result<User, ValidationFailed>
 if (isErr(result)) {
-  for (const { path, message } of result.error.details.issues) {
+  for (const { path, message } of result.error.details?.issues ?? []) {
     console.log(path.join('.'), message);   // "email", "invalid email"
   }
 }
@@ -273,7 +333,7 @@ import { isErr, isOk, parseResult } from '@zireal/result-kit';
 const parsed = parseResult(await response.json());
 
 if (isErr(parsed)) {
-  console.error(parsed.error.details.reason); // 'not_an_object' | 'error_dropped' | …
+  console.error(parsed.error.details?.reason); // 'not_an_object' | 'error_dropped' | …
   return;
 }
 
