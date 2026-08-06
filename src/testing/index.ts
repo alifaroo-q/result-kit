@@ -36,6 +36,7 @@ import type { MatcherState } from 'vitest';
 
 import { expectErr, expectOk } from '../core/assertions';
 import { renderPayload } from '../core/render';
+import { isResultLike } from '../core/result-like';
 import { isOk } from '../core/result';
 import type { Result } from '../core/result';
 
@@ -85,27 +86,6 @@ function thrownMessage(assertion: () => unknown): string {
   throw new Error(
     'result-kit/testing: internal invariant — a matcher paired a non-throwing ' +
       'assertion with its branch, which would have produced an empty failure message.',
-  );
-}
-
-/**
- * Structural `Result` check, per spec §2 — the union is brandless, so this is
- * all there is to ask.
- *
- * It does **not** require the `value` / `error` key, deliberately. `ok()`
- * produces `{ ok: true, value: undefined }`, which JSON round-trips to
- * `{ ok: true }` — and §2.1 promises that round-trip yields a usable `Result`.
- * A presence check would reject exactly the value the guarantee is about.
- *
- * A callable is admitted for the same reason §10.9 widened `isTypedError`: a
- * function carrying `ok: true` is structurally an `Ok` and tsc assigns it, so a
- * guard that rejected it would be narrower than the type it gates.
- */
-function isResultLike(x: unknown): x is Result<unknown, unknown> {
-  return (
-    (typeof x === 'object' || typeof x === 'function') &&
-    x !== null &&
-    typeof (x as { ok?: unknown }).ok === 'boolean'
   );
 }
 

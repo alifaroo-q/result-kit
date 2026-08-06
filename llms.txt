@@ -134,6 +134,28 @@ combineWithAllErrors(results)  // same, but collects EVERY error into an array
 partition(results)             // [values, errors] — both halves, always
 ```
 
+Both combinators also take a **record**, and return one keyed identically —
+`partition` does not. The record form of `combineWithAllErrors` accumulates
+`KeyedError<K, E>` entries (`{ key, error }`) instead of a flat array, so you can
+tell which field failed; the array form stays flat.
+
+```ts
+combine({ user: findUser(id), posts: listPosts(id) });
+// Result<{ user: User; posts: Post[] }, NotFound | Timeout>
+
+const checked = combineWithAllErrors({ name: checkName(i), age: checkAge(i) });
+// Err carries (KeyedError<'name', NameError> | KeyedError<'age', AgeError>)[]
+if (!checked.ok) prettifyErrors(checked.error.map((e) => e.error)); // BRIDGE: unwrap first
+```
+
+`groupByType` and `prettifyErrors` take a flat `TypedError[]`, so a `KeyedError[]`
+must be mapped through `(e) => e.error` first. "First Err" over a record means
+**property order** (`Object.keys`: integer-like keys ascending, then insertion
+order), own enumerable keys only; symbol keys are silently invisible.
+`combine({})` is `ok({})`. An entry that is not a `Result` — a present-but-
+`undefined` optional key, or a hole in a sparse array — throws a named
+diagnostic rather than a bare `TypeError`.
+
 **Error matching and formatting**
 
 ```ts
@@ -171,7 +193,7 @@ expectErr(r)  // the error, or throw
 
 **Types** — `Result` `Ok` `Err` `TypedError` `ErrorCtor` `ErrorsOf` `OkTypeOf`
 `ErrTypeOf` `ValidationIssue` `ValidationFailed` `FromSchemaOptions`
-`MalformedResult` `MalformedResultReason`
+`MalformedResult` `MalformedResultReason` `KeyedError`
 
 ---
 

@@ -3,6 +3,7 @@ export {
   combine,
   combineWithAllErrors,
   partition,
+  type KeyedError,
 } from './core/collections';
 export { safeTry, safeUnwrap } from './core/do-notation';
 export {
